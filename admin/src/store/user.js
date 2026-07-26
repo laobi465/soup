@@ -7,9 +7,9 @@ export const useUserStore = defineStore(
   () => {
     const token = ref(sessionStorage.getItem('token') || '')
     const refreshToken = ref(sessionStorage.getItem('refreshToken') || '')
-    const userInfo = ref(JSON.parse(localStorage.getItem('userInfo') || '{}'))
-    const menus = ref(JSON.parse(localStorage.getItem('menus') || '[]'))
-    const permissions = ref(JSON.parse(localStorage.getItem('permissions') || '[]'))
+    const userInfo = ref(JSON.parse(sessionStorage.getItem('userInfo') || '{}'))
+    const menus = ref(JSON.parse(sessionStorage.getItem('menus') || '[]'))
+    const permissions = ref(JSON.parse(sessionStorage.getItem('permissions') || '[]'))
 
     const isLoggedIn = computed(() => !!token.value)
     const hasUserInfo = computed(() => !!userInfo.value && !!userInfo.value.id)
@@ -26,26 +26,25 @@ export const useUserStore = defineStore(
 
     function setUserInfo(info) {
       userInfo.value = info
-      localStorage.setItem('userInfo', JSON.stringify(info))
+      sessionStorage.setItem('userInfo', JSON.stringify(info))
     }
 
     function setMenus(menuList) {
       menus.value = menuList
-      localStorage.setItem('menus', JSON.stringify(menuList))
+      sessionStorage.setItem('menus', JSON.stringify(menuList))
     }
 
     function setPermissions(permissionList) {
       permissions.value = permissionList
-      localStorage.setItem('permissions', JSON.stringify(permissionList))
+      sessionStorage.setItem('permissions', JSON.stringify(permissionList))
     }
 
     function hasPermission(permission) {
       if (!permission) return true
-      if (permissions.value.includes(permission)) return true
       if (Array.isArray(permission)) {
         return permission.some(p => permissions.value.includes(p))
       }
-      return false
+      return permissions.value.includes(permission)
     }
 
     async function login(loginForm) {
@@ -96,9 +95,9 @@ export const useUserStore = defineStore(
       permissions.value = []
       sessionStorage.removeItem('token')
       sessionStorage.removeItem('refreshToken')
-      localStorage.removeItem('userInfo')
-      localStorage.removeItem('menus')
-      localStorage.removeItem('permissions')
+      sessionStorage.removeItem('userInfo')
+      sessionStorage.removeItem('menus')
+      sessionStorage.removeItem('permissions')
     }
 
     return {

@@ -247,37 +247,29 @@ class PaymentService
 
     public function processOrderPaid(Order $order): void
     {
-        try {
-            switch ($order->type) {
-                case Order::TYPE_RECHARGE:
-                    $this->processRecharge($order);
-                    break;
-                case Order::TYPE_PACKAGE:
-                case Order::TYPE_RENEW:
-                    $this->processPackage($order);
-                    break;
-                case Order::TYPE_SHOP:
-                    $this->processShopOrder($order);
-                    break;
-            }
+        switch ($order->type) {
+            case Order::TYPE_RECHARGE:
+                $this->processRecharge($order);
+                break;
+            case Order::TYPE_PACKAGE:
+            case Order::TYPE_RENEW:
+                $this->processPackage($order);
+                break;
+            case Order::TYPE_SHOP:
+                $this->processShopOrder($order);
+                break;
+        }
 
-            if ($order->agent_id > 0) {
-                try {
-                    $commissionService = new CommissionService();
-                    $commissionService->calculateCommission($order);
-                } catch (\Exception $e) {
-                    Log::error('calculate_commission_error', [
-                        'order_id' => $order->id,
-                        'msg' => $e->getMessage(),
-                    ]);
-                }
+        if ($order->agent_id > 0) {
+            try {
+                $commissionService = new CommissionService();
+                $commissionService->calculateCommission($order);
+            } catch (\Exception $e) {
+                Log::error('calculate_commission_error', [
+                    'order_id' => $order->id,
+                    'msg' => $e->getMessage(),
+                ]);
             }
-        } catch (\Exception $e) {
-            Log::error('process_order_paid_error', [
-                'order_id' => $order->id,
-                'msg' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
         }
     }
 
@@ -318,20 +310,13 @@ class PaymentService
 
     protected function processShopOrder(Order $order): void
     {
-        try {
-            $extra = json_decode($order->extra, true);
-            $quantity = isset($extra['quantity']) ? intval($extra['quantity']) : 1;
-            if ($quantity <= 0) {
-                $quantity = 1;
-            }
-            $cardService = new CardDeliveryService();
-            $cardService->deliverCard($order->id, $quantity);
-        } catch (\Exception $e) {
-            Log::error('deliver_card_error', [
-                'order_id' => $order->id,
-                'msg' => $e->getMessage(),
-            ]);
+        $extra = json_decode($order->extra, true);
+        $quantity = isset($extra['quantity']) ? intval($extra['quantity']) : 1;
+        if ($quantity <= 0) {
+            $quantity = 1;
         }
+        $cardService = new CardDeliveryService();
+        $cardService->deliverCard($order->id, $quantity);
     }
 
     public function closeExpiredOrders(): int
