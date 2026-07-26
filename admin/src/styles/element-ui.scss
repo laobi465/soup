@@ -1,0 +1,241 @@
+@use './variables.scss' as *;
+
+:root {
+  --el-color-primary: #{$primary-color};
+  --el-color-primary-light-3: #{$primary-color-light};
+  --el-color-primary-dark-2: #{$primary-color-dark};
+  --el-color-success: #{$success-color};
+  --el-color-warning: #{$warning-color};
+  --el-color-danger: #{$danger-color};
+  --el-color-info: #{$info-color};
+  --el-font-family: #{$font-family};
+  --el-border-radius-base: #{$border-radius-base};
+  --el-border-radius-small: #{$border-radius-sm};
+  --el-border-radius-round: #{$border-radius-round};
+}
+
+.el-button--primary {
+  --el-button-bg-color: $primary-color;
+  --el-button-border-color: $primary-color;
+  --el-button-hover-bg-color: $primary-color-light;
+  --el-button-hover-border-color: $primary-color-light;
+  --el-button-active-bg-color: $primary-color-dark;
+  --el-button-active-border-color: $primary-color-dark;
+}
+
+.el-menu {
+  --el-menu-bg-color: #1f2d3d;
+  --el-menu-hover-bg-color: #263445;
+  --el-menu-active-color: $primary-color;
+  --el-menu-text-color: #bfcbd9;
+  --el-menu-item-height: 50px;
+  --el-menu-sub-item-height: 45px;
+  border-right: none;
+}
+
+.el-sub-menu__title:hover,
+.el-menu-item:hover {
+  background-color: var(--el-menu-hover-bg-color);
+}
+
+.el-menu-item.is-active {
+  background-color: rgba($primary-color, 0.1);
+}
+
+.el-pagination {
+  .btn-prev,
+  .btn-next,
+  .el-pager li {
+    min-width: 32px;
+    height: 32px;
+    line-height: 30px;
+    font-size: $font-size-sm;
+  }
+}
+
+.el-dialog {
+  --el-dialog-border-radius: $border-radius-md;
+}
+
+.el-card {
+  --el-card-border-radius: $border-radius-base;
+  border: none;
+  box-shadow: $shadow-lighter;
+}
+
+.el-table {
+  --el-table-header-bg-color: #fafafa;
+  --el-table-header-text-color: $text-primary;
+  --el-table-row-hover-bg-color: #f5f7fa;
+  border-radius: $border-radius-base;
+
+  th.el-table__cell {
+    font-weight: $font-weight-medium;
+  }
+}
+
+.el-input__wrapper {
+  border-radius: $border-radius-base;
+}
+
+.el-select__wrapper {
+  border-radius: $border-radius-base;
+}
+
+.el-textarea__inner {
+  border-radius: $border-radius-base;
+}
+
+.el-message-box {
+  border-radius: $border-radius-md;
+}
+
+.el-message {
+  border-radius: $border-radius-base;
+}
+
+.el-notification {
+  border-radius: $border-radius-md;
+}
+
+.el-drawer {
+  border-radius: 0;
+}
+
+.el-tag {
+  border-radius: $border-radius-sm;
+}
+
+.el-badge__content {
+  border-radius: $border-radius-round;
+}
+
+.el-avatar {
+  border-radius: $border-radius-base;
+}
+
+.el-progress-bar__outer {
+  border-radius: $border-radius-round;
+}
+
+.el-switch {
+  --el-switch-core-border-radius: $border-radius-round;
+}
+
+.el-slider__runway {
+  border-radius: $border-radius-round;
+}
+
+.el-slider__bar {
+  border-radius: $border-radius-round;
+}
+
+.el-slider__button {
+  border-radius: $border-radius-circle;
+}
+
+.el-upload-dragger {
+  border-radius: $border-radius-base;
+}
+
+.el-descriptions {
+  --el-descriptions-table-border: 1px solid $border-lighter;
+  --el-descriptions-item-label-bg-color: #fafafa;
+}
+
+.el-empty {
+  padding: $spacing-xl 0;
+}
+
+.el-skeleton {
+  --el-skeleton-color: #f2f2f2;
+}
+
+.el-rate__icon {
+  font-size: $font-size-lg;
+}
+
+.el-breadcrumb {
+  font-size: $font-size-sm;
+}
+
+.el-dropdown-menu {
+  border-radius: $border-radius-base;
+  box-shadow: $shadow-base;
+}
+
+.el-tooltip__popper {
+  border-radius: $border-radius-sm;
+}
+
+.el-popover {
+  border-radius: $border-radius-base;
+  box-shadow: $shadow-base;
+}
+
+.el-tabs__item {
+  font-size: $font-size-base;
+}
+
+.el-tab-pane {
+  padding: $spacing-base 0;
+}
+
+.el-steps {
+  padding: $spacing-base 0;
+}
+
+.el-tree {
+  background: transparent;
+}
+
+.el-cascader-menu {
+  border-radius: $border-radius-base;
+}
+
+.el-color-picker__panel {
+  border-radius: $border-radius-base;
+}
+
+.el-date-picker {
+  border-radius: $border-radius-base;
+}
+
+.el-picker-panel {
+  border-radius: $border-radius-base;
+  box-shadow: $shadow-base;
+}
+
+.el-time-panel {
+  border-radius: $border-radius-base;
+  box-shadow: $shadow-base;
+}
+
+.el-form-item__label {
+  font-size: $font-size-sm;
+}
+
+.el-checkbox__label {
+  font-size: $font-size-base;
+}
+
+.el-radio__label {
+  font-size: $font-size-base;
+}
+
+.el-switch__label {
+  font-size: $font-size-sm;
+}
+
+@media screen and (max-width: $breakpoint-sm) {
+  .el-dialog {
+    --el-dialog-width: 95%;
+    margin: 5vh auto;
+  }
+
+  .el-pagination {
+    .el-pager li:nth-child(n+4):nth-last-child(n+4) {
+      display: none;
+    }
+  }
+}

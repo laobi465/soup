@@ -1,0 +1,452 @@
+# 网络验证（卡密）SaaS 平台 - The Implementation Plan (Decomposed and Prioritized Task List)
+
+## [x] Task 1: 项目脚手架与基础设施搭建
+- **Priority**: high
+- **Depends On**: None
+- **Description**:
+  - 初始化后端 ThinkPHP 8 项目骨架，配置目录结构、命名空间、.env 环境变量
+  - 初始化前端 Vue3 + Element Plus 项目骨架，配置路由、Pinia、Axios、Element Plus
+  - 搭建 Docker Compose 开发环境（Nginx + PHP-FPM + MySQL 8 + Redis）
+  - 配置代码规范（PHP-CS-Fixer / ESLint / Prettier）
+  - 配置 Git 仓库、.gitignore、初始 README
+- **Acceptance Criteria Addressed**: AC-17
+- **Test Requirements**:
+  - `programmatic` TR-1.1: `docker-compose up -d` 后所有容器健康运行，访问域名返回 200
+  - `programmatic` TR-1.2: ThinkPHP 8 框架正常运行，`php think` 命令可用
+  - `programmatic` TR-1.3: 前端项目 `npm run dev` 正常启动，首页可访问
+  - `programmatic` TR-1.4: MySQL 数据库可连接，Redis 可连接
+  - `human-judgement` TR-1.5: 项目目录结构清晰，前后端职责分离，配置合理
+- **Notes**: 建议使用官方 Docker 镜像，PHP 8.2 + ThinkPHP 8.x，Vue 3.4 + Vite + Pinia
+
+## [x] Task 2: 数据库设计与迁移脚本
+- **Priority**: high
+- **Depends On**: Task 1
+- **Description**:
+  - 基于 PRD 第 8 章设计 16 张核心表的 MySQL 建表语句
+  - 编写 ThinkPHP 迁移脚本（migration）
+  - 编写数据填充脚本（seeder）：初始超管账号、默认四档套餐、系统配置项
+  - 设计索引策略（查询频繁的字段加索引，唯一约束）
+  - 包含表：users、merchants、packages、apps、cards、devices、api_logs、orders、shop_products、agents、wallets、wallet_transactions、operation_logs、risk_blacklist、announcements、tickets
+- **Acceptance Criteria Addressed**: AC-1, AC-2, AC-3, AC-7, AC-9, AC-16
+- **Test Requirements**:
+  - `programmatic` TR-2.1: 执行 `php think migrate:run` 所有表创建成功
+  - `programmatic` TR-2.2: 执行 `php think seed:run` 初始数据填充成功
+  - `programmatic` TR-2.3: 16 张核心表全部存在，字段与 PRD 一致
+  - `programmatic` TR-2.4: 唯一约束生效（重复 username/email/app_key 插入失败）
+  - `human-judgement` TR-2.5: 索引设计合理，覆盖主要查询场景
+- **Notes**: 卡密表需设计为分片友好结构，api_logs 后续迁移到时序数据库
+
+## [x] Task 3: 用户认证与权限系统
+- **Priority**: high
+- **Depends On**: Task 2
+- **Description**:
+  - 实现 JWT 认证中间件（登录、登出、Token 刷新、过期处理）
+  - 实现 RBAC 权限模型：角色表、权限表、角色权限关联表、用户角色关联表
+  - 实现菜单权限（前端动态路由 + 后端权限校验）
+  - 实现按钮权限（指令式权限判断）
+  - 实现数据权限（商户只能看自己的数据，超管看全部）
+  - 实现登录风控：失败次数计数、锁定机制、异地登录邮件提醒
+  - 实现邮箱验证码发送与校验
+  - 6 类角色初始权限分配
+- **Acceptance Criteria Addressed**: AC-1, AC-15, AC-16
+- **Test Requirements**:
+  - `programmatic` TR-3.1: 注册接口正常创建商户，密码 bcrypt 哈希存储
+  - `programmatic` TR-3.2: 登录接口返回 JWT Token，Token 可解析出用户信息
+  - `programmatic` TR-3.3: 无 Token 访问受保护接口返回 401
+  - `programmatic` TR-3.4: 权限不足的接口返回 403
+  - `programmatic` TR-3.5: 连续登录失败 10 次后账号锁定 30 分钟
+  - `programmatic` TR-3.6: 敏感操作接口触发二次验证校验
+  - `human-judgement` TR-3.7: 权限模型设计清晰，扩展性好，角色/权限/菜单数据结构合理
+- **Notes**: 使用 firebase/php-jwt 或官方认证库，权限缓存用 Redis
+
+## [x] Task 4: 商户管理与套餐系统
+- **Priority**: high
+- **Depends On**: Task 3
+- **Description**:
+  - 超管端：套餐 CRUD（四档套餐配置、应用数/卡密量限制）
+  - 超管端：商户列表、商户详情、商户禁用/启用、重置密码
+  - 商户端：个人中心、套餐详情、套餐升级/续费
+  - 商户端：余额充值、钱包流水
+  - 商户套餐额度校验中间件（超配额时拦截）
+  - 套餐到期处理（到期后只读模式，API 停止服务）
+- **Acceptance Criteria Addressed**: AC-1, AC-15
+- **Test Requirements**:
+  - `programmatic` TR-4.1: 超管可增删改查套餐配置
+  - `programmatic` TR-4.2: 商户可查看当前套餐详情与剩余额度
+  - `programmatic` TR-4.3: 超配额后创建应用/生成卡密被拦截并提示
+  - `programmatic` TR-4.4: 商户禁用后登录被拒
+  - `programmatic` TR-4.5: 套餐到期后商户 API 返回商户已过期错误
+  - `human-judgement` TR-4.6: 套餐额度校验逻辑清晰，边界处理正确
+- **Notes**: 套餐变更需记录操作日志，超管可手动调整商户额度
+
+## [x] Task 5: 应用管理系统
+- **Priority**: high
+- **Depends On**: Task 4
+- **Description**:
+  - 应用 CRUD（名称、图标、版本、描述）
+  - AppKey（32 位随机字符串）自动生成，AppSecret（32 位）生成时明文仅展示一次，哈希后存储
+  - IP 白名单配置（一行一个 IP，支持 CIDR）
+  - 设备绑定上限配置
+  - 应用启用/停用（停用后所有卡密验证失效）
+  - 应用列表分页、搜索、筛选
+  - 应用详情页（基础信息 + 卡密统计 + API 调用统计）
+  - 重置 AppSecret（二次验证，旧 Secret 立即失效）
+- **Acceptance Criteria Addressed**: AC-2, AC-15, AC-16
+- **Test Requirements**:
+  - `programmatic` TR-5.1: 创建应用成功，返回 AppKey 和 AppSecret 明文
+  - `programmatic` TR-5.2: 数据库中 AppSecret 为 bcrypt 哈希，不可逆推明文
+  - `programmatic` TR-5.3: 停用应用后验证 API 返回应用已停用错误
+  - `programmatic` TR-5.4: 重置 AppSecret 后旧 Secret 鉴权失败
+  - `programmatic` TR-5.5: 超配额时创建应用被拦截
+  - `human-judgement` TR-5.6: 应用详情页信息完整，统计数据清晰
+- **Notes**: AppKey 全局唯一，用 UUID v4 或随机字符串生成
+
+## [x] Task 6: 卡密生成与管理
+- **Priority**: high
+- **Depends On**: Task 5
+- **Description**:
+  - 卡密生成算法：支持自定义长度（16-32 位）、自定义前缀、自定义字符集（大小写字母+数字+符号，可配置去除混淆字符）、自定义模板
+  - 单个生成 + 批量生成（单次最多 10000 张，异步队列处理）
+  - 卡密哈希存储（SHA-256），生成时明文仅展示一次，支持复制/导出
+  - 卡密列表：筛选（应用、类型、状态、时间）、分页、搜索（前缀）
+  - 卡密详情：基本信息、绑定设备列表、操作日志
+  - 卡密状态操作：封禁、解封、作废、续费
+  - 设备解绑：支持单个设备解绑，可配置解绑次数限制
+  - 批量导入（CSV/文本，一行一个卡密，哈希后入库）
+  - 批量导出 Excel/CSV（仅前缀，不导出明文）
+  - 七种卡密类型：日卡、周卡、月卡、季卡、年卡、永久卡、试用卡
+- **Acceptance Criteria Addressed**: AC-3, AC-6, AC-12, AC-13, AC-15
+- **Test Requirements**:
+  - `programmatic` TR-6.1: 单张/批量生成成功，数量准确，前缀正确
+  - `programmatic` TR-6.2: 数据库中卡密为 SHA-256 哈希，无明文存储
+  - `programmatic` TR-6.3: 生成页面明文卡密仅展示一次，刷新后不可见
+  - `programmatic` TR-6.4: 封禁后卡密验证返回已封禁错误
+  - `programmatic` TR-6.5: 解绑设备后绑定数减少，新设备可绑定
+  - `programmatic` TR-6.6: 5 分钟内连续失败 15 次触发自动封禁
+  - `programmatic` TR-6.7: 导出文件格式正确，数据与筛选条件一致
+  - `human-judgement` TR-6.8: 卡密生成算法随机性好，无规律可循
+- **Notes**: 批量生成用消息队列异步处理，避免超时；生成记录存批次表
+
+## [x] Task 7: 卡密验证 API（核心）
+- **Priority**: high
+- **Depends On**: Task 6
+- **Description**:
+  - 实现 10 个 API 接口：验证、激活、换绑、查询、生成、心跳、在线人数、变量公告、用户注册登录、卡密兑换
+  - 五重鉴权中间件：AppKey+Secret 签名校验（HMAC-SHA256）、时间戳校验（5 分钟内）、Nonce 防重放（Redis 存已用 Nonce）、IP 白名单校验、HTTPS 强制
+  - 五维限流中间件：卡密/IP/设备/应用/商户分别限流，Redis 计数
+  - 请求/响应 AES 加密（CBC 模式，密钥由应用派生）
+  - 统一 JSON 返回格式 + 统一错误码（见 PRD 10.3）
+  - 设备绑定逻辑（首次激活绑定，达上限拒绝）
+  - 心跳保活 + 超时踢下线（心跳间隔可配置，超时 3 次踢下线）
+  - 卡密状态机：未使用 → 已激活 → 已到期 → (续费激活/作废)
+  - API 调用日志写入（异步队列写入时序数据库，或先写 MySQL）
+  - 防爆破：5 分钟失败 15 次自动封禁卡密 + IP
+- **Acceptance Criteria Addressed**: AC-4, AC-5, AC-6, AC-12
+- **Test Requirements**:
+  - `programmatic` TR-7.1: 有效卡密验证返回成功，包含卡密状态、到期时间、剩余时长
+  - `programmatic` TR-7.2: 签名错误返回 4001，时间戳过期返回 4002，Nonce 重复返回 4003
+  - `programmatic` TR-7.3: IP 不在白名单返回 4004，限流触发返回 4005
+  - `programmatic` TR-7.4: AES 加密请求可正确解密，响应加密后客户端可解密
+  - `programmatic` TR-7.5: 首次激活绑定设备成功，重复激活同一设备成功，新设备达上限拒绝
+  - `programmatic` TR-7.6: 心跳正常更新在线状态，超时后设备下线
+  - `programmatic` TR-7.7: 已到期/已封禁/已作废卡密验证返回对应错误码
+  - `programmatic` TR-7.8: 单接口压测 P99 ≤ 50ms（Redis 缓存卡密状态）
+  - `human-judgement` TR-7.9: 鉴权中间件代码结构清晰，可扩展性好
+- **Notes**: 卡密状态用 Redis 缓存，减少 DB 查询；限流用 Redis 滑动窗口算法
+
+## [x] Task 8: 支付系统（彩虹易支付对接）
+- **Priority**: high
+- **Depends On**: Task 4
+- **Description**:
+  - 支付通道抽象层（PaymentDriver 接口），支持多种支付驱动
+  - 彩虹易支付驱动实现：下单、回调、查询、退款
+  - 超管全局支付配置
+  - 商户自有支付通道配置（商户自配彩虹易支付参数）
+  - 订单管理：创建、状态流转、超时关闭（10 分钟）
+  - 支付回调处理：验签、更新订单状态、触发业务逻辑（发卡/充值/开通套餐）
+  - 商户余额充值
+  - 退款流程（二次验证，原路退回）
+  - 订单列表、订单详情、订单导出
+- **Acceptance Criteria Addressed**: AC-7, AC-8, AC-15
+- **Test Requirements**:
+  - `programmatic` TR-8.1: 创建订单成功，跳转支付页面正常
+  - `programmatic` TR-8.2: 支付回调验签通过，订单状态更新为已支付
+  - `programmatic` TR-8.3: 超时 10 分钟订单自动关闭，库存释放
+  - `programmatic` TR-8.4: 商户余额充值成功，流水记录正确
+  - `programmatic` TR-8.5: 退款成功，金额原路返回，状态更新
+  - `programmatic` TR-8.6: 不同支付通道可切换，互不影响
+  - `human-judgement` TR-8.7: 支付通道抽象设计合理，易扩展新支付方式
+- **Notes**: 回调接口需做幂等处理，防止重复通知；订单号全局唯一
+
+## [x] Task 9: 发卡平台
+- **Priority**: high
+- **Depends On**: Task 8
+- **Description**:
+  - 商户店铺配置：店铺名称、Logo、轮播图、主题色、公告、联系方式、上下架状态
+  - 商品管理：CRUD、分类、库存、限购（每人/每 IP/每设备）、上下架
+  - 商品详情页：图片、描述、价格、库存、购买按钮
+  - 下单流程：选择数量 → 填写邮箱 → 创建订单 → 跳转支付
+  - 支付成功：页面显示卡密明文 + 自动发送邮件（含卡密）
+  - 订单查询：凭订单号或邮箱查询历史订单与卡密
+  - 平台统一市场：所有商户上架商品聚合，搜索、分类筛选
+  - 限购校验：用户/IP/设备维度限购计数
+  - 发卡店铺独立域名/路径：`/shop/{merchant_no}`
+- **Acceptance Criteria Addressed**: AC-7, AC-8, AC-14
+- **Test Requirements**:
+  - `programmatic` TR-9.1: 商户可配置店铺信息，前台展示正确
+  - `programmatic` TR-9.2: 商品上架后前台可见，下架后不可购买
+  - `programmatic` TR-9.3: 下单支付成功后自动发货，卡密显示正确
+  - `programmatic` TR-9.4: 邮件发送成功，包含卡密信息
+  - `programmatic` TR-9.5: 订单超时 10 分钟自动关闭
+  - `programmatic` TR-9.6: 限购规则生效，达上限不可再购买
+  - `programmatic` TR-9.7: 平台市场可搜索到上架商品
+  - `human-judgement` TR-9.8: 发卡页面 UI 美观，购买流程顺畅，移动端适配良好
+- **Notes**: 发卡页面 H5 响应式优先；卡密从卡密池取未使用的，售出后标记已售
+
+## [x] Task 10: 商户三级分销系统
+- **Priority**: high
+- **Depends On**: Task 4, Task 8
+- **Description**:
+  - 邀请码生成：商户、一级、二级代理各有专属邀请码，三级不可生成
+  - 邀请注册：通过邀请码注册的代理自动归属邀请人下级，终身绑定
+  - 代理等级设置：商户后台设置各级代理拿货折扣、佣金比例
+  - 代理管理：列表、详情、调整等级、修改价格/佣金、禁用/启用
+  - 代理树视图：树状展示分销层级关系，可展开收起
+  - 差价模式：代理拿货价 = 原价 × 折扣，加价部分为利润
+  - 佣金模式：订单成交后按比例分配佣金给各级代理
+  - 佣金计算：订单支付成功后计算佣金，进入冻结状态
+  - D+1 结算：每日定时任务解冻前一日佣金，进入可用余额
+  - 代理钱包：可用余额、冻结余额、累计收益、佣金明细
+  - 代理提现：申请、审核（自动/手动）、D+1 到账、手续费（3%）、最低 1 元
+  - 三级硬限制：三级代理无法生成邀请码，三级邀请码注册被拒绝
+  - 代理后台：仪表盘、推广链接、下级管理、佣金明细、钱包提现
+- **Acceptance Criteria Addressed**: AC-9, AC-10, AC-11, AC-15, AC-16
+- **Test Requirements**:
+  - `programmatic` TR-10.1: 商户/一级/二级可生成邀请码，三级不可生成
+  - `programmatic` TR-10.2: 通过邀请码注册的代理正确归属上级，终身绑定不可改
+  - `programmatic` TR-10.3: 三级邀请码注册被拒绝，返回提示
+  - `programmatic` TR-10.4: 订单支付成功后佣金正确计算，进入冻结状态
+  - `programmatic` TR-10.5: D+1 定时任务执行后佣金解冻为可用余额
+  - `programmatic` TR-10.6: 提现申请成功，扣除手续费，金额正确
+  - `programmatic` TR-10.7: 代理树结构正确，四级关系清晰
+  - `human-judgement` TR-10.8: 分销层级用闭包表实现，查询效率高
+- **Notes**: 用闭包表（closure table）存层级关系；佣金计算需考虑退款场景
+
+## [x] Task 11: 数据统计与仪表盘
+- **Priority**: medium
+- **Depends On**: Task 7, Task 9, Task 10
+- **Description**:
+  - 超管仪表盘：商户总数/今日新增、代理总数、卡密总数/今日生成、订单数/交易额、平台收入、API 调用量、在线数、待处理工单、异常告警
+  - 商户仪表盘：应用数、卡密状态分布、API 调用额度、发卡收入、代理数、在线设备、待处理工单、续费提醒
+  - 商户自定义看板：可选择展示指标、拖拽排序、保存布局
+  - 代理仪表盘：推广代理数、今日新增、佣金收益、下级数、推广数据
+  - 图表：折线图（趋势）、饼图（分布）、柱状图（对比），用 ECharts 实现
+  - 时间筛选：今日/昨日/近7天/近30天/自定义
+  - 数据导出：Excel/CSV（卡密、订单、佣金、日志）
+  - 定时报表：每日/每周自动发送邮件报表（超管 + 商户可选）
+- **Acceptance Criteria Addressed**: AC-13, AC-14
+- **Test Requirements**:
+  - `programmatic` TR-11.1: 超管/商户/代理仪表盘数据准确，与数据库一致
+  - `programmatic` TR-11.2: 时间筛选功能正常，数据随时间范围变化
+  - `programmatic` TR-11.3: 导出文件格式正确，数据完整
+  - `programmatic` TR-11.4: 自定义看板布局可保存可恢复
+  - `programmatic` TR-11.5: 定时报表任务可触发，邮件发送成功
+  - `human-judgement` TR-11.6: 仪表盘布局合理，数据可视化清晰，关键指标突出
+- **Notes**: 统计数据用 Redis 缓存 + 定时聚合，避免实时查库拖慢性能
+
+## [x] Task 12: 安全风控系统
+- **Priority**: medium
+- **Depends On**: Task 7
+- **Description**:
+  - 注册风控：同 IP 注册限制（每 IP 每天最多 N 个）、邮箱验证强制
+  - 异常订单监控：短时间（10 分钟）同一用户/IP 下单超过阈值告警
+  - 异常 API 监控：突发流量（较均值突增 300%）告警、错误率飙升告警
+  - 商户异常行为检测：生成卡密但不验证、长期不活跃等
+  - 黑名单管理：IP/设备/手机/邮箱黑名单 CRUD，支持永久和限时
+  - 黑名单拦截中间件：请求进来先查黑名单，命中则拒绝
+  - 告警通知：邮件通知超管，可配置告警阈值
+  - 风控中心页面：异常登录、异常订单、异常 API、黑名单管理、告警记录
+- **Acceptance Criteria Addressed**: AC-12, AC-16
+- **Test Requirements**:
+  - `programmatic` TR-12.1: 同 IP 注册超限被拦截
+  - `programmatic` TR-12.2: 黑名单 IP/设备请求被拒绝
+  - `programmatic` TR-12.3: 异常订单触发告警，超管收到邮件
+  - `programmatic` TR-12.4: API 突发流量触发告警
+  - `programmatic` TR-12.5: 黑名单 CRUD 正常，限时黑名单到期自动解除
+  - `human-judgement` TR-12.6: 风控规则可配置，阈值合理，误报率低
+- **Notes**: 风控规则参数化，超管可在后台配置阈值，无需改代码
+
+## [x] Task 13: 操作日志与消息通知
+- **Priority**: medium
+- **Depends On**: Task 3
+- **Description**:
+  - 操作日志记录：所有写操作（增删改）记录日志，含用户、IP、UA、操作类型、对象、请求数据、时间
+  - 操作日志列表：筛选（用户、操作类型、时间、IP）、分页、详情查看
+  - 登录日志：登录成功/失败、IP、地点、UA、时间
+  - 站内消息：通知中心、未读计数、标记已读、全部已读
+  - 消息触发场景：套餐到期提醒、卡密到期提醒、提现到账通知、工单状态变更、平台公告、异常告警
+  - 邮件通知：重要事件发送邮件（注册、提现、异地登录、告警）
+  - 消息模板管理：超管可编辑消息模板
+- **Acceptance Criteria Addressed**: AC-16
+- **Test Requirements**:
+  - `programmatic` TR-13.1: 任意写操作后操作日志表新增记录，字段完整
+  - `programmatic` TR-13.2: 登录日志记录成功/失败，IP 定位正确
+  - `programmatic` TR-13.3: 触发消息场景后站内信和邮件都能收到
+  - `programmatic` TR-13.4: 未读消息计数正确，标记已读后计数减少
+  - `human-judgement` TR-13.5: 日志查询界面易用，筛选功能完整
+- **Notes**: 操作日志用数据库表 + 定期归档；邮件用队列异步发送
+
+## [x] Task 14: 商户子账号系统
+- **Priority**: medium
+- **Depends On**: Task 3
+- **Description**:
+  - 子账号 CRUD：商户主账号创建子账号（用户名、密码、姓名、邮箱）
+  - 角色管理：商户可自定义角色（如：运营、财务、客服），分配菜单权限和按钮权限
+  - 数据权限：按应用分配（子账号只能看到指定应用的数据）
+  - 子账号登录：独立账号密码，登录后进入商户后台（权限受限）
+  - 子账号状态：启用/禁用
+  - 操作日志：子账号操作记录归属商户，可追溯
+- **Acceptance Criteria Addressed**: AC-15, AC-16
+- **Test Requirements**:
+  - `programmatic` TR-14.1: 商户主账号可创建/编辑/删除子账号
+  - `programmatic` TR-14.2: 子账号登录后只看到授权的菜单和按钮
+  - `programmatic` TR-14.3: 子账号只能访问分配的应用数据
+  - `programmatic` TR-14.4: 禁用子账号后登录被拒
+  - `human-judgement` TR-14.5: 权限分配界面直观，角色管理易用
+- **Notes**: 子账号数量受套餐限制
+
+## [x] Task 15: 前端 UI 统一与全局组件
+- **Priority**: medium
+- **Depends On**: Task 1
+- **Description**:
+  - 全局样式：蓝色主色调、简约商务风、仅亮色主题、禁用 Emoji
+  - 全局组件：DataTable（列表+分页+筛选）、FormModal（新增编辑弹窗）、ConfirmDialog（确认弹窗）、EmptyState（空状态）、Loading（加载）
+  - 布局组件：AdminLayout（侧边栏+顶栏+内容区）、ShopLayout（发卡平台布局）
+  - 路由守卫：权限校验、登录校验、403/404 页面
+  - 请求封装：Axios 封装（拦截器、Token 注入、错误处理、重试）
+  - 状态管理：Pinia store（用户信息、权限、全局配置）
+  - 响应式适配：PC、平板、手机三档断点
+  - 全局表单校验规则封装
+- **Acceptance Criteria Addressed**: AC-14
+- **Test Requirements**:
+  - `programmatic` TR-15.1: 全局组件可复用，各页面调用正常
+  - `programmatic` TR-15.2: 权限路由正常，无权限页面返回 403
+  - `programmatic` TR-15.3: 不同屏幕尺寸下布局适配正常
+  - `programmatic` TR-15.4: 界面无 Emoji 表情符号
+  - `human-judgement` TR-15.5: 整体 UI 风格统一，蓝色主色调，简约商务
+  - `human-judgement` TR-15.6: 组件封装合理，代码复用度高
+- **Notes**: Element Plus 主题定制；移动端优先考虑常用页面
+
+## [x] Task 16: SDK 开发（5 种语言）
+- **Priority**: medium
+- **Depends On**: Task 7
+- **Description**:
+  - Python SDK：封装签名生成、AES 加解密、所有 API 调用
+  - C# SDK：.NET Standard 2.0，封装验证、激活、心跳等核心功能
+  - Java SDK：Java 8+，Maven 项目结构
+  - 易语言 SDK：易语言模块，封装核心 API
+  - VB SDK：VB.NET 或 VB6，封装验证功能
+  - 统一 SDK 设计模式：初始化（AppKey + Secret）→ 调用方法 → 返回结果
+  - 接入文档：快速开始、API 文档、常见问题、示例代码
+  - 每个 SDK 提供完整示例项目
+- **Acceptance Criteria Addressed**: AC-18
+- **Test Requirements**:
+  - `programmatic` TR-16.1: Python SDK 调用验证接口成功，结果正确
+  - `programmatic` TR-16.2: C# SDK 调用验证接口成功
+  - `programmatic` TR-16.3: Java SDK 调用验证接口成功
+  - `programmatic` TR-16.4: 易语言 SDK 调用验证接口成功（环境允许时）
+  - `programmatic` TR-16.5: 各 SDK 签名算法与服务端一致，鉴权通过
+  - `human-judgement` TR-16.6: SDK API 设计简洁易用，文档完整，5 分钟可接入
+- **Notes**: SDK 放独立仓库或 monorepo 子包；文档用 Markdown
+
+## [x] Task 17: 文件存储驱动系统
+- **Priority**: medium
+- **Depends On**: Task 1
+- **Description**:
+  - 存储驱动抽象接口（StorageDriver）：上传、删除、获取 URL、获取文件信息
+  - 本地存储驱动：服务器本地磁盘
+  - 阿里云 OSS 驱动
+  - 腾讯云 COS 驱动
+  - 七牛云驱动
+  - MinIO 驱动
+  - 超管后台配置存储驱动类型和参数
+  - 文件上传统一入口，自动路由到当前配置的驱动
+- **Acceptance Criteria Addressed**: AC-17
+- **Test Requirements**:
+  - `programmatic` TR-17.1: 本地存储上传/删除/获取 URL 正常
+  - `programmatic` TR-17.2: 切换存储驱动后上传路由到正确的驱动
+  - `programmatic` TR-17.3: 各驱动参数配置可保存可生效
+  - `human-judgement` TR-17.4: 驱动抽象设计合理，新增驱动只需实现接口
+- **Notes**: 用 Flysystem 类似的设计模式；图片上传加压缩和水印（可选）
+
+## [x] Task 18: Docker Compose 生产部署
+- **Priority**: medium
+- **Depends On**: Task 1, Task 17
+- **Description**:
+  - 生产级 Docker Compose 配置：Nginx、PHP-FPM、MySQL 8、Redis、消息队列 Worker、定时任务
+  - Nginx 配置：HTTPS、Gzip 压缩、静态资源缓存、反向代理、负载均衡
+  - 数据持久化：MySQL 数据卷、Redis 数据卷、上传文件卷
+  - 日志管理：应用日志、Nginx 日志、MySQL 慢查询日志
+  - 健康检查：各容器健康检查配置
+  - 备份方案：数据库每日自动备份脚本，可配置异地备份
+  - 环境变量配置：.env 文件管理敏感信息
+  - 部署文档：宝塔面板部署步骤、Docker 安装、初始化流程
+- **Acceptance Criteria Addressed**: AC-17
+- **Test Requirements**:
+  - `programmatic` TR-18.1: `docker-compose up -d` 所有容器启动成功，健康检查通过
+  - `programmatic` TR-18.2: 平台可正常访问，前后端功能正常
+  - `programmatic` TR-18.3: MySQL 数据持久化，容器重启数据不丢失
+  - `programmatic` TR-18.4: 备份脚本执行成功，生成备份文件
+  - `human-judgement` TR-18.5: 部署文档清晰，宝塔面板操作步骤完整
+- **Notes**: 先单机部署，预留 K8s 扩展能力
+
+## [x] Task 19: 工单系统
+- **Priority**: low
+- **Depends On**: Task 3
+- **Description**:
+  - 工单提交：用户（商户/代理/终端用户）提交工单，选分类、优先级、描述、附件
+  - 工单列表：我的工单、全部工单（超管/运营）
+  - 工单处理：运营回复、标记状态（待处理/处理中/已解决/已关闭）
+  - 工单详情：对话记录、附件、操作日志
+  - 消息通知：工单状态变更通知提交人
+  - 工单分类管理（超管）
+- **Acceptance Criteria Addressed**: AC-16
+- **Test Requirements**:
+  - `programmatic` TR-19.1: 用户可提交工单，含附件上传
+  - `programmatic` TR-19.2: 运营可回复工单，状态流转正常
+  - `programmatic` TR-19.3: 工单状态变更后用户收到通知
+  - `human-judgement` TR-19.4: 工单界面易用，对话流清晰
+- **Notes**: 优先级可在 PRD 确认后调整，可能 V1.1 再做
+
+## [x] Task 20: 平台公告系统
+- **Priority**: low
+- **Depends On**: Task 3
+- **Description**:
+  - 公告 CRUD（超管）：标题、内容、类型（系统/活动/维护）、生效时间、失效时间
+  - 公告列表（用户端）：按时间倒序，类型标签
+  - 公告详情页
+  - 弹窗公告：重要公告首次访问弹窗显示
+  - 商户后台顶部公告栏
+- **Acceptance Criteria Addressed**: AC-16
+- **Test Requirements**:
+  - `programmatic` TR-20.1: 超管可发布公告，生效后用户可见
+  - `programmatic` TR-20.2: 过期公告自动不显示
+  - `programmatic` TR-20.3: 弹窗公告首次访问弹出，标记已读后不再弹出
+  - `human-judgement` TR-20.4: 公告展示清晰，不打扰用户
+- **Notes**: 功能简单，可合并到其他任务中
+
+## [x] Task 21: 系统配置管理
+- **Priority**: low
+- **Depends On**: Task 1
+- **Description**:
+  - 系统配置表：key-value 结构，支持分组
+  - 超管配置页面：基础配置、API 限流配置、邮件配置、支付配置、卡密生成配置、安全配置、存储配置
+  - 配置缓存（Redis），修改后自动清缓存
+  - 配置项验证（类型、范围、格式校验）
+- **Acceptance Criteria Addressed**: AC-15
+- **Test Requirements**:
+  - `programmatic` TR-21.1: 修改配置后保存成功，下次读取为新值
+  - `programmatic` TR-21.2: 配置缓存生效，读取优先走缓存
+  - `programmatic` TR-21.3: 配置项校验生效，非法值被拒绝
+  - `human-judgement` TR-21.4: 配置界面分类清晰，参数说明完善
+- **Notes**: 用 think-config 或自定义配置服务

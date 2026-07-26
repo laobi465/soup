@@ -1,0 +1,33 @@
+卡密验证SDK - 易语言模块
+版本: 1.0.0
+作者: CardAuth
+
+本模块提供卡密验证平台的易语言SDK封装
+
+模块功能:
+1. 卡密验证 (CardVerify)
+2. 卡密激活 (CardActivate)
+3. 设备换绑 (CardRebind)
+4. 卡密查询 (CardQuery)
+5. 心跳上报 (CardHeartbeat)
+6. 在线人数 (GetOnlineCount)
+7. 获取公告 (GetAnnouncement)
+
+使用方法:
+1. 在易语言中加载本模块
+2. 调用 初始化SDK() 设置参数
+3. 调用相应的API接口
+
+签名算法: HMAC-SHA256
+签名串: METHOD + PATH + TIMESTAMP + NONCE + BODY
+
+请求头:
+- X-AppKey: 应用Key
+- X-Timestamp: 时间戳(秒)
+- X-Nonce: 随机字符串
+- X-Sign: 签名结果
+
+注意:
+- 需要用到精易模块或类似的网络请求模块
+- 需要用到HMAC-SHA256加密支持
+- 所有接口返回JSON格式数据

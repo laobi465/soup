@@ -1,0 +1,669 @@
+@import './variables.scss';
+
+.flex {
+  display: flex;
+}
+
+.flex-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.flex-wrap {
+  flex-wrap: wrap;
+}
+
+.flex-1 {
+  flex: 1;
+}
+
+.items-center {
+  align-items: center;
+}
+
+.items-start {
+  align-items: flex-start;
+}
+
+.items-end {
+  align-items: flex-end;
+}
+
+.justify-center {
+  justify-content: center;
+}
+
+.justify-between {
+  justify-content: space-between;
+}
+
+.justify-start {
+  justify-content: flex-start;
+}
+
+.justify-end {
+  justify-content: flex-end;
+}
+
+.justify-around {
+  justify-content: space-around;
+}
+
+.text-center {
+  text-align: center;
+}
+
+.text-left {
+  text-align: left;
+}
+
+.text-right {
+  text-align: right;
+}
+
+.m-0 {
+  margin: 0;
+}
+
+.m-xs {
+  margin: $spacing-xs;
+}
+
+.m-sm {
+  margin: $spacing-sm;
+}
+
+.m-md {
+  margin: $spacing-md;
+}
+
+.m-base {
+  margin: $spacing-base;
+}
+
+.m-lg {
+  margin: $spacing-lg;
+}
+
+.m-xl {
+  margin: $spacing-xl;
+}
+
+.mt-xs {
+  margin-top: $spacing-xs;
+}
+
+.mt-sm {
+  margin-top: $spacing-sm;
+}
+
+.mt-md {
+  margin-top: $spacing-md;
+}
+
+.mt-base {
+  margin-top: $spacing-base;
+}
+
+.mt-lg {
+  margin-top: $spacing-lg;
+}
+
+.mt-xl {
+  margin-top: $spacing-xl;
+}
+
+.mb-xs {
+  margin-bottom: $spacing-xs;
+}
+
+.mb-sm {
+  margin-bottom: $spacing-sm;
+}
+
+.mb-md {
+  margin-bottom: $spacing-md;
+}
+
+.mb-base {
+  margin-bottom: $spacing-base;
+}
+
+.mb-lg {
+  margin-bottom: $spacing-lg;
+}
+
+.mb-xl {
+  margin-bottom: $spacing-xl;
+}
+
+.ml-xs {
+  margin-left: $spacing-xs;
+}
+
+.ml-sm {
+  margin-left: $spacing-sm;
+}
+
+.ml-md {
+  margin-left: $spacing-md;
+}
+
+.ml-base {
+  margin-left: $spacing-base;
+}
+
+.ml-lg {
+  margin-left: $spacing-lg;
+}
+
+.ml-xl {
+  margin-left: $spacing-xl;
+}
+
+.mr-xs {
+  margin-right: $spacing-xs;
+}
+
+.mr-sm {
+  margin-right: $spacing-sm;
+}
+
+.mr-md {
+  margin-right: $spacing-md;
+}
+
+.mr-base {
+  margin-right: $spacing-base;
+}
+
+.mr-lg {
+  margin-right: $spacing-lg;
+}
+
+.mr-xl {
+  margin-right: $spacing-xl;
+}
+
+.p-0 {
+  padding: 0;
+}
+
+.p-xs {
+  padding: $spacing-xs;
+}
+
+.p-sm {
+  padding: $spacing-sm;
+}
+
+.p-md {
+  padding: $spacing-md;
+}
+
+.p-base {
+  padding: $spacing-base;
+}
+
+.p-lg {
+  padding: $spacing-lg;
+}
+
+.p-xl {
+  padding: $spacing-xl;
+}
+
+.pt-xs {
+  padding-top: $spacing-xs;
+}
+
+.pt-sm {
+  padding-top: $spacing-sm;
+}
+
+.pt-md {
+  padding-top: $spacing-md;
+}
+
+.pt-base {
+  padding-top: $spacing-base;
+}
+
+.pt-lg {
+  padding-top: $spacing-lg;
+}
+
+.pt-xl {
+  padding-top: $spacing-xl;
+}
+
+.pb-xs {
+  padding-bottom: $spacing-xs;
+}
+
+.pb-sm {
+  padding-bottom: $spacing-sm;
+}
+
+.pb-md {
+  padding-bottom: $spacing-md;
+}
+
+.pb-base {
+  padding-bottom: $spacing-base;
+}
+
+.pb-lg {
+  padding-bottom: $spacing-lg;
+}
+
+.pb-xl {
+  padding-bottom: $spacing-xl;
+}
+
+.pl-xs {
+  padding-left: $spacing-xs;
+}
+
+.pl-sm {
+  padding-left: $spacing-sm;
+}
+
+.pl-md {
+  padding-left: $spacing-md;
+}
+
+.pl-base {
+  padding-left: $spacing-base;
+}
+
+.pl-lg {
+  padding-left: $spacing-lg;
+}
+
+.pl-xl {
+  padding-left: $spacing-xl;
+}
+
+.pr-xs {
+  padding-right: $spacing-xs;
+}
+
+.pr-sm {
+  padding-right: $spacing-sm;
+}
+
+.pr-md {
+  padding-right: $spacing-md;
+}
+
+.pr-base {
+  padding-right: $spacing-base;
+}
+
+.pr-lg {
+  padding-right: $spacing-lg;
+}
+
+.pr-xl {
+  padding-right: $spacing-xl;
+}
+
+.text-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.text-ellipsis-2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.text-ellipsis-3 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.w-full {
+  width: 100%;
+}
+
+.h-full {
+  height: 100%;
+}
+
+.min-h-full {
+  min-height: 100%;
+}
+
+.cursor-pointer {
+  cursor: pointer;
+}
+
+.cursor-default {
+  cursor: default;
+}
+
+.cursor-not-allowed {
+  cursor: not-allowed;
+}
+
+.pointer-events-none {
+  pointer-events: none;
+}
+
+.pointer-events-auto {
+  pointer-events: auto;
+}
+
+.overflow-hidden {
+  overflow: hidden;
+}
+
+.overflow-auto {
+  overflow: auto;
+}
+
+.overflow-x-auto {
+  overflow-x: auto;
+}
+
+.overflow-y-auto {
+  overflow-y: auto;
+}
+
+.relative {
+  position: relative;
+}
+
+.absolute {
+  position: absolute;
+}
+
+.fixed {
+  position: fixed;
+}
+
+.sticky {
+  position: sticky;
+}
+
+.font-normal {
+  font-weight: $font-weight-normal;
+}
+
+.font-medium {
+  font-weight: $font-weight-medium;
+}
+
+.font-bold {
+  font-weight: $font-weight-bold;
+}
+
+.text-xs {
+  font-size: $font-size-xs;
+}
+
+.text-sm {
+  font-size: $font-size-sm;
+}
+
+.text-base {
+  font-size: $font-size-base;
+}
+
+.text-md {
+  font-size: $font-size-md;
+}
+
+.text-lg {
+  font-size: $font-size-lg;
+}
+
+.text-xl {
+  font-size: $font-size-xl;
+}
+
+.text-xxl {
+  font-size: $font-size-xxl;
+}
+
+.text-primary {
+  color: $primary-color;
+}
+
+.text-success {
+  color: $success-color;
+}
+
+.text-warning {
+  color: $warning-color;
+}
+
+.text-danger {
+  color: $danger-color;
+}
+
+.text-info {
+  color: $info-color;
+}
+
+.text-primary-text {
+  color: $text-primary;
+}
+
+.text-regular-text {
+  color: $text-regular;
+}
+
+.text-secondary-text {
+  color: $text-secondary;
+}
+
+.bg-white {
+  background-color: $background-base;
+}
+
+.bg-page {
+  background-color: $background-page;
+}
+
+.bg-color {
+  background-color: $background-color;
+}
+
+.rounded-sm {
+  border-radius: $border-radius-sm;
+}
+
+.rounded-base {
+  border-radius: $border-radius-base;
+}
+
+.rounded-md {
+  border-radius: $border-radius-md;
+}
+
+.rounded-lg {
+  border-radius: $border-radius-lg;
+}
+
+.rounded-full {
+  border-radius: $border-radius-round;
+}
+
+.rounded-circle {
+  border-radius: $border-radius-circle;
+}
+
+.border {
+  border: 1px solid $border-base;
+}
+
+.border-top {
+  border-top: 1px solid $border-base;
+}
+
+.border-bottom {
+  border-bottom: 1px solid $border-base;
+}
+
+.border-left {
+  border-left: 1px solid $border-base;
+}
+
+.border-right {
+  border-right: 1px solid $border-base;
+}
+
+.shadow-base {
+  box-shadow: $shadow-base;
+}
+
+.shadow-light {
+  box-shadow: $shadow-light;
+}
+
+.shadow-lighter {
+  box-shadow: $shadow-lighter;
+}
+
+.transition-base {
+  transition: $transition-base;
+}
+
+.transition-fast {
+  transition: $transition-fast;
+}
+
+.opacity-0 {
+  opacity: 0;
+}
+
+.opacity-50 {
+  opacity: 0.5;
+}
+
+.opacity-100 {
+  opacity: 1;
+}
+
+.hidden {
+  display: none;
+}
+
+.block {
+  display: block;
+}
+
+.inline-block {
+  display: inline-block;
+}
+
+.inline {
+  display: inline;
+}
+
+.visible {
+  visibility: visible;
+}
+
+.invisible {
+  visibility: hidden;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: $border-extra-light;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: $border-light;
+  border-radius: 3px;
+
+  &:hover {
+    background: $border-base;
+  }
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: $border-light $border-extra-light;
+}
+
+.page-container {
+  padding: $spacing-base;
+  background-color: $background-page;
+  min-height: calc(100vh - #{$header-height} - #{$tabs-height});
+}
+
+.card-container {
+  background-color: $background-base;
+  border-radius: $border-radius-base;
+  padding: $spacing-base;
+  box-shadow: $shadow-lighter;
+}
+
+.search-bar {
+  background-color: $background-base;
+  padding: $spacing-base;
+  border-radius: $border-radius-base;
+  margin-bottom: $spacing-base;
+  box-shadow: $shadow-lighter;
+}
+
+.table-wrapper {
+  background-color: $background-base;
+  border-radius: $border-radius-base;
+  padding: $spacing-base;
+  box-shadow: $shadow-lighter;
+}
+
+.form-wrapper {
+  background-color: $background-base;
+  border-radius: $border-radius-base;
+  padding: $spacing-xl;
+  box-shadow: $shadow-lighter;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: $spacing-base;
+}
+
+@media screen and (max-width: $breakpoint-lg) {
+  .page-container {
+    padding: $spacing-sm;
+  }
+
+  .card-container,
+  .search-bar,
+  .table-wrapper,
+  .form-wrapper {
+    padding: $spacing-sm;
+  }
+}
+
+@media screen and (max-width: $breakpoint-sm) {
+  .page-container {
+    padding: $spacing-xs;
+  }
+
+  .card-container,
+  .search-bar,
+  .table-wrapper,
+  .form-wrapper {
+    padding: $spacing-xs;
+  }
+}

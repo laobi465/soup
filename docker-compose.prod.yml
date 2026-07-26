@@ -1,0 +1,120 @@
+services:
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: card-auth-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf
+      - ./docker/nginx/ssl:/etc/nginx/ssl
+      - ./server:/var/www/server
+      - ./admin/dist:/var/www/admin
+      - nginx-logs:/var/log/nginx
+    depends_on:
+      - php-fpm
+    networks:
+      - card-auth-network
+    restart: always
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  php-fpm:
+    build:
+      context: ./docker/php
+      dockerfile: Dockerfile
+    container_name: card-auth-php
+    volumes:
+      - ./server:/var/www/server
+      - ./docker/php/php-prod.ini:/usr/local/etc/php/php.ini
+      - php-logs:/var/log/php
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - card-auth-network
+    restart: always
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  queue-worker:
+    build:
+      context: ./docker/php
+      dockerfile: Dockerfile
+    container_name: card-auth-queue
+    volumes:
+      - ./server:/var/www/server
+      - ./docker/php/php-prod.ini:/usr/local/etc/php/php.ini
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - card-auth-network
+    restart: always
+    command: php think queue:work --daemon --tries=3
+
+  scheduler:
+    build:
+      context: ./docker/php
+      dockerfile: Dockerfile
+    container_name: card-auth-scheduler
+    volumes:
+      - ./server:/var/www/server
+      - ./docker/php/php-prod.ini:/usr/local/etc/php/php.ini
+    depends_on:
+      - mysql
+      - redis
+    networks:
+      - card-auth-network
+    restart: always
+    command: sh -c "while true; do php think schedule:run; sleep 60; done"
+
+  mysql:
+    image: mysql:8.0
+    container_name: card-auth-mysql
+    ports:
+      - "127.0.0.1:3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
+      MYSQL_DATABASE: card_auth
+      MYSQL_CHARSET: utf8mb4
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/mysql/my.cnf:/etc/mysql/conf.d/my.cnf
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d
+      - mysql-logs:/var/log/mysql
+    networks:
+      - card-auth-network
+    restart: always
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  redis:
+    image: redis:7-alpine
+    container_name: card-auth-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf
+    networks:
+      - card-auth-network
+    restart: always
+    command: redis-server /usr/local/etc/redis/redis.conf
+
+volumes:
+  mysql-data:
+  redis-data:
+  nginx-logs:
+  php-logs:
+  mysql-logs:
+
+networks:
+  card-auth-network:
+    driver: bridge

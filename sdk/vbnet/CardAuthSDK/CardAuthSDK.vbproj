@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>CardAuthSDK</RootNamespace>
+    <AssemblyName>CardAuthSDK</AssemblyName>
+    <Version>1.0.0</Version>
+    <Authors>CardAuth</Authors>
+    <Description>卡密验证平台 VB.NET SDK</Description>
+    <PackageProjectUrl>https://github.com/cardauth/sdk</PackageProjectUrl>
+    <License>MIT</License>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+</Project>
