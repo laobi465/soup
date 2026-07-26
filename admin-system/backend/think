@@ -1,0 +1,35 @@
+#!/usr/bin/env php
+<?php
+// +----------------------------------------------------------------------
+// | ThinkPHP [ WE CAN DO IT JUST THINK ]
+// +----------------------------------------------------------------------
+// | Copyright (c) 2006-2024 http://thinkphp.cn All rights reserved.
+// +----------------------------------------------------------------------
+// | Licensed ( http://www.apache.org/licenses/LICENSE-2.0 )
+// +----------------------------------------------------------------------
+// | Author: liu21st <liu21st@gmail.com>
+// +----------------------------------------------------------------------
+// | Date: 2024-01-01
+// +----------------------------------------------------------------------
+
+namespace think;
+
+// CLI 入口脚本
+// 命令行执行入口，所有 think 命令均通过本文件启动
+
+// 加载 Composer 自动加载
+require __DIR__ . '/vendor/autoload.php';
+
+// 加载 .env 配置（开发时使用；生产环境由部署脚本注入环境变量）
+$envFile = __DIR__ . '/.env';
+if (is_file($envFile)) {
+    $dotenv = new \think\facade\Env();
+    $dotenv->load($envFile);
+}
+
+// 启动应用并执行控制台命令
+$app = new App();
+$app->initialize();
+$console = $app->make(\think\Console::class, [], true);
+$status = $console->run();
+exit($status);
