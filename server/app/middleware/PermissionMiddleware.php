@@ -7,6 +7,8 @@ use Closure;
 use think\Request;
 use think\Response;
 use think\facade\Config;
+use app\model\User;
+use app\model\SubRole;
 
 class PermissionMiddleware
 {
@@ -23,9 +25,26 @@ class PermissionMiddleware
         }
 
         if ($permission) {
-            $permissions = Config::get("permission.permissions.{$roleType}", []);
-            if (!in_array($permission, $permissions)) {
-                return $this->forbidden('无权限访问');
+            if ($roleType == 4) {
+                $userId = $user['user_id'] ?? 0;
+                $userModel = User::find($userId);
+                if (!$userModel || empty($userModel->sub_role_id)) {
+                    return $this->forbidden('无权限访问');
+                }
+
+                $subRole = SubRole::find($userModel->sub_role_id);
+                if (!$subRole || empty($subRole->permissions)) {
+                    return $this->forbidden('无权限访问');
+                }
+
+                if (!in_array($permission, $subRole->permissions)) {
+                    return $this->forbidden('无权限访问');
+                }
+            } else {
+                $permissions = Config::get("permission.permissions.{$roleType}", []);
+                if (!in_array($permission, $permissions)) {
+                    return $this->forbidden('无权限访问');
+                }
             }
         }
 

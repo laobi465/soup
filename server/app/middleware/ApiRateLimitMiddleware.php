@@ -3,6 +3,7 @@ declare (strict_types = 1);
 
 namespace app\middleware;
 
+use app\service\CardService;
 use think\facade\Cache;
 use think\Request;
 use think\Response;
@@ -37,7 +38,7 @@ class ApiRateLimitMiddleware
         ];
 
         if ($cardNo) {
-            $checks['card'] = 'card:' . md5($cardNo);
+            $checks['card'] = 'card:' . CardService::hashCardNo($cardNo);
         }
 
         if ($deviceFingerprint) {
@@ -50,8 +51,20 @@ class ApiRateLimitMiddleware
             }
             $limit = $limits[$type] ?? ($this->limits[$type] ?? 100);
             $key = 'ratelimit:' . $type . ':' . $keySuffix . ':' . floor(time() / self::WINDOW_SECONDS);
-            $current = Cache::get($key, 0);
-            if ($current >= $limit) {
+
+            try {
+                $redis = Cache::store('redis')->handler();
+                $current = $redis->incr($key);
+                if ($current == 1) {
+                    $redis->expire($key, self::WINDOW_SECONDS * 2);
+                }
+            } catch (\Exception $e) {
+                $current = Cache::get($key, 0);
+                $current++;
+                Cache::set($key, $current, self::WINDOW_SECONDS * 2);
+            }
+
+            if ($current > $limit) {
                 $resetIn = self::WINDOW_SECONDS - (time() % self::WINDOW_SECONDS);
                 return $this->errorResponse(4005, '请求超限，请稍后再试', [
                     'retry_after' => $resetIn,
@@ -61,19 +74,7 @@ class ApiRateLimitMiddleware
             }
         }
 
-        $response = $next($request);
-
-        foreach ($checks as $type => $keySuffix) {
-            if (!$keySuffix) {
-                continue;
-            }
-            $key = 'ratelimit:' . $type . ':' . $keySuffix . ':' . floor(time() / self::WINDOW_SECONDS);
-            $current = Cache::get($key, 0);
-            $current++;
-            Cache::set($key, $current, self::WINDOW_SECONDS * 2);
-        }
-
-        return $response;
+        return $next($request);
     }
 
     protected function getLimits(int $appId): array

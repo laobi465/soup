@@ -108,7 +108,7 @@ class CaihongPay extends PaymentDriver
         $sign = $data['sign'];
         $calculatedSign = $this->generateSign($data, $key);
 
-        return $sign === $calculatedSign;
+        return hash_equals($calculatedSign, $sign);
     }
 
     public function getNotifyData(): array
@@ -142,8 +142,6 @@ class CaihongPay extends PaymentDriver
         curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($params));
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
 
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);

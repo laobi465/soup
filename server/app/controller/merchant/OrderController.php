@@ -34,6 +34,11 @@ class OrderController extends BaseController
 
         $query = Order::where('merchant_id', $merchant->id)->order('id', 'desc');
 
+        $appIds = $request->app_ids ?? null;
+        if (!empty($appIds) && is_array($appIds)) {
+            $query->whereIn('app_id', $appIds);
+        }
+
         if ($type !== '') {
             $query->where('type', intval($type));
         }

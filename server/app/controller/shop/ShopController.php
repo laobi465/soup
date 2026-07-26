@@ -22,6 +22,10 @@ class ShopController extends BaseController
             return error('店铺不存在', 404);
         }
 
+        if ($merchant->status != 1) {
+            return error('店铺已关闭', 403);
+        }
+
         $shopConfig = $this->getShopConfig($merchant);
 
         $products = ShopProduct::where('merchant_id', $merchant->id)
@@ -54,6 +58,10 @@ class ShopController extends BaseController
         $merchant = Merchant::where('merchant_no', $merchantNo)->find();
         if (!$merchant) {
             return error('店铺不存在', 404);
+        }
+
+        if ($merchant->status != 1) {
+            return error('店铺已关闭', 403);
         }
 
         $page = $request->param('page', 1);
@@ -136,13 +144,21 @@ class ShopController extends BaseController
             return error('店铺不存在', 404);
         }
 
+        if ($merchant->status != 1) {
+            return error('店铺已关闭', 403);
+        }
+
         $productId = intval($request->param('product_id', 0));
         $quantity = intval($request->param('quantity', 1));
         $email = $request->param('email', '');
         $payChannel = $request->param('pay_channel', 'caihong');
         $payType = $request->param('pay_type', 'alipay');
         $userId = intval($request->param('user_id', 0));
-        $agentId = intval($request->param('agent_id', 0));
+        $agentId = intval($request->cookie('agent_id', 0));
+        if ($agentId <= 0) {
+            $agentId = intval($request->param('agent_id', 0));
+        }
+        $deviceId = $request->header('X-Device-Id', '');
 
         if ($productId <= 0) {
             return error('请选择商品', 400);
@@ -150,6 +166,10 @@ class ShopController extends BaseController
 
         if ($quantity <= 0) {
             return error('购买数量无效', 400);
+        }
+
+        if ($quantity > 100) {
+            return error('单次最多购买100份', 400);
         }
 
         if (empty($email)) {
@@ -201,6 +221,8 @@ class ShopController extends BaseController
                 'email' => $email,
                 'quantity' => $quantity,
                 'agent_id' => $agentId,
+                'buyer_ip' => $request->ip(),
+                'device_id' => $deviceId,
             ]
         );
 

@@ -125,12 +125,21 @@ class CommissionService
         $transactions = WalletTransaction::where('type', 4)
             ->where('settle_status', 0)
             ->where('settle_date', $yesterday)
+            ->limit(500)
             ->select();
 
         $count = 0;
         foreach ($transactions as $transaction) {
             Db::startTrans();
             try {
+                $affected = WalletTransaction::where('id', $transaction->id)
+                    ->where('settle_status', 0)
+                    ->update(['settle_status' => 1]);
+                if (!$affected) {
+                    Db::rollback();
+                    continue;
+                }
+
                 $wallet = Wallet::where('id', $transaction->wallet_id)->lock(true)->find();
                 if (!$wallet) {
                     Db::rollback();
@@ -143,15 +152,12 @@ class CommissionService
                 $wallet->balance = bcadd(strval($wallet->balance), $amount, 2);
                 $wallet->save();
 
-                $agent = Agent::where('user_id', $wallet->user_id)->where('type', 2)->find();
+                $agent = Agent::where('user_id', $wallet->user_id)->where('type', 2)->lock(true)->find();
                 if ($agent) {
                     $agent->frozen_balance = bcsub(strval($agent->frozen_balance), $amount, 2);
                     $agent->available_balance = bcadd(strval($agent->available_balance), $amount, 2);
                     $agent->save();
                 }
-
-                $transaction->settle_status = 1;
-                $transaction->save();
 
                 $unfreezeTransaction = new WalletTransaction();
                 $unfreezeTransaction->wallet_id = $wallet->id;
@@ -198,12 +204,21 @@ class CommissionService
                     $wallet = Wallet::where('id', $transaction->wallet_id)->lock(true)->find();
                     if ($wallet) {
                         $wallet->frozen = bcsub(strval($wallet->frozen), strval($transaction->amount), 2);
+                        if (bccomp(strval($wallet->frozen), '0', 2) < 0) {
+                            $wallet->frozen = '0.00';
+                        }
                         $wallet->save();
 
-                        $agent = Agent::where('user_id', $wallet->user_id)->find();
+                        $agent = Agent::where('user_id', $wallet->user_id)->lock(true)->find();
                         if ($agent) {
                             $agent->frozen_balance = bcsub(strval($agent->frozen_balance), strval($transaction->amount), 2);
+                            if (bccomp(strval($agent->frozen_balance), '0', 2) < 0) {
+                                $agent->frozen_balance = '0.00';
+                            }
                             $agent->total_earnings = bcsub(strval($agent->total_earnings), strval($transaction->amount), 2);
+                            if (bccomp(strval($agent->total_earnings), '0', 2) < 0) {
+                                $agent->total_earnings = '0.00';
+                            }
                             $agent->save();
                         }
 
@@ -222,13 +237,32 @@ class CommissionService
                 } else {
                     $wallet = Wallet::where('id', $transaction->wallet_id)->lock(true)->find();
                     if ($wallet) {
-                        $wallet->balance = bcsub(strval($wallet->balance), strval($transaction->amount), 2);
+                        $newBalance = bcsub(strval($wallet->balance), strval($transaction->amount), 2);
+                        if (bccomp($newBalance, '0', 2) < 0) {
+                            Log::warning('refund_commission_balance_insufficient', [
+                                'wallet_id' => $wallet->id,
+                                'transaction_id' => $transaction->id,
+                                'order_no' => $order->order_no,
+                                'current_balance' => $wallet->balance,
+                                'deduct_amount' => $transaction->amount,
+                                'shortfall' => bcsub(strval($transaction->amount), strval($wallet->balance), 2),
+                            ]);
+                            $newBalance = '0.00';
+                        }
+                        $wallet->balance = $newBalance;
                         $wallet->save();
 
-                        $agent = Agent::where('user_id', $wallet->user_id)->find();
+                        $agent = Agent::where('user_id', $wallet->user_id)->lock(true)->find();
                         if ($agent) {
-                            $agent->available_balance = bcsub(strval($agent->available_balance), strval($transaction->amount), 2);
+                            $newAvailable = bcsub(strval($agent->available_balance), strval($transaction->amount), 2);
+                            if (bccomp($newAvailable, '0', 2) < 0) {
+                                $newAvailable = '0.00';
+                            }
+                            $agent->available_balance = $newAvailable;
                             $agent->total_earnings = bcsub(strval($agent->total_earnings), strval($transaction->amount), 2);
+                            if (bccomp(strval($agent->total_earnings), '0', 2) < 0) {
+                                $agent->total_earnings = '0.00';
+                            }
                             $agent->save();
                         }
 

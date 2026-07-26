@@ -31,6 +31,11 @@ class ShopProductController extends BaseController
 
         $query = ShopProduct::where('merchant_id', $merchant->id)->order('id', 'desc');
 
+        $appIds = $request->app_ids ?? null;
+        if (!empty($appIds) && is_array($appIds)) {
+            $query->whereIn('app_id', $appIds);
+        }
+
         if ($status !== '') {
             $query->where('status', intval($status));
         }

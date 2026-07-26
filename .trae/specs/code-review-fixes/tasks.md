@@ -1,0 +1,176 @@
+# 代码审查问题修复 - The Implementation Plan
+
+## [ ] Task 1: 安全密钥与默认值修复
+- **Priority**: high
+- **Depends On**: None
+- **Description**:
+  - 移除 JWT 密钥硬编码默认值，在 JwtService 构造函数中校验密钥必填且长度≥32
+  - 移除 AES 加密密钥硬编码默认值，在 AesEncrypt 中校验密钥必填
+  - 删除 ApiAuthMiddleware 中 AppSecret 解密失败回退到 bcrypt hash 的逻辑
+  - 将 `.example.env` 默认 `APP_DEBUG` 改为 `false`，补全 JWT 配置项
+  - 修复 docker-compose.yml 和 docker-compose.prod.yml 硬编码数据库密码，改用环境变量强制要求
+- **Acceptance Criteria Addressed**: AC-1, AC-10
+- **Test Requirements**:
+  - `programmatic` TR-1.1: 未配置 JWT_SECRET 时 JwtService 抛出异常
+  - `programmatic` TR-1.2: 未配置 APP_SECRET_KEY 时 AesEncrypt 抛出异常
+  - `programmatic` TR-1.3: AppSecret 解密失败直接返回错误，不回退
+  - `programmatic` TR-1.4: .example.env 中 APP_DEBUG=false
+  - `programmatic` TR-1.5: docker-compose 密码使用 ${VAR:?必须设置} 语法
+- **Notes**: 这是所有安全修复的基础，必须第一个完成
+
+## [ ] Task 2: 权限系统接线修复
+- **Priority**: high
+- **Depends On**: Task 1
+- **Description**:
+  - merchant 路由组绑定 PermissionMiddleware
+  - admin 路由的 PermissionMiddleware 传入正确的权限参数（每个路由声明对应的权限名）
+  - DataPermissionMiddleware 注册到 merchant 路由组
+  - 所有 merchant 控制器（CardController、AppController、OrderController、AgentController、ShopProductController 等）查询时按 app_ids 过滤
+  - PermissionMiddleware 中 role_type=4 时从数据库 sub_roles.permissions 读取权限
+  - 权限以 permission.php 配置为准
+- **Acceptance Criteria Addressed**: AC-2, AC-10
+- **Test Requirements**:
+  - `programmatic` TR-2.1: 商户路由组已绑定 PermissionMiddleware
+  - `programmatic` TR-2.2: DataPermissionMiddleware 已注册到 merchant 路由
+  - `programmatic` TR-2.3: 子账号只能看到被授权应用的卡密
+  - `programmatic` TR-2.4: 子角色权限从数据库读取而非硬编码
+  - `human-judgement` TR-2.5: 权限参数声明完整，每个路由都有对应权限名
+- **Notes**: 这是水平越权和垂直越权的核心修复
+
+## [ ] Task 3: 卡密安全与日志修复
+- **Priority**: high
+- **Depends On**: Task 1
+- **Description**:
+  - API 日志中 card_no 脱敏：保留前4后4，中间用*替换
+  - device_fingerprint 哈希后记录
+  - 防爆破逻辑重写：
+    - 无论卡密是否存在都按 IP + card_hash 计数
+    - 增加 IP 维度全局计数（bruteforce:ip:{ip}）限制总尝试次数
+    - verify 接口对未激活卡不计爆破（正确卡号不算爆破）
+    - 把 checkBruteForce 调用下沉到 CardService 内部
+    - 用 Redis INCR 原子自增
+  - Nonce 防重放改用 Redis SETNX 原子操作
+  - 限流计数改用 Redis INCR 原子操作，且在业务执行前计数
+- **Acceptance Criteria Addressed**: AC-3, AC-4, AC-8, AC-9, AC-10
+- **Test Requirements**:
+  - `programmatic` TR-3.1: API 日志中 card_no 为脱敏格式
+  - `programmatic` TR-3.2: 枚举不存在卡号 15 次后 IP 被封禁
+  - `programmatic` TR-3.3: 相同 nonce 并发请求只有一个通过
+  - `programmatic` TR-3.4: 限流使用 Redis INCR 原子操作
+  - `programmatic` TR-3.5: 限流计数在业务执行前
+- **Notes**: 涉及 Redis 操作，需确保 Redis 连接可用
+
+## [ ] Task 4: 发卡业务修复（含数据库迁移）
+- **Priority**: high
+- **Depends On**: Task 1
+- **Description**:
+  - 新增数据库迁移：cards 表增加 card_no_encrypted 字段（AES 加密明文）
+  - 新增数据库迁移：orders 表增加 buyer_ip、device_id 字段
+  - CardService 生成卡密时同时写入 card_no_encrypted（AES 加密）
+  - Card 模型增加 getCardNoPlainText() 方法（解密返回明文）
+  - CardDeliveryService 从 card_no_encrypted 读取明文
+  - ShopController 创建订单时写入 buyer_ip 和 device_id
+  - 修复 quantity 多份只发 1 张：deliverCard 接收 quantity 参数，循环发卡
+  - 库存扣减改为原子 DEC 操作，循环扣减 quantity 次
+  - quantity 增加上限限制（单次最多 100 份）
+  - ShopController 校验商户 status
+  - agent_id 从服务端解析（通过 cookie 或邀请码参数服务端校验）
+  - PurchaseLimitService 字段名修正（buyer_ip、device_id）
+- **Acceptance Criteria Addressed**: AC-5, AC-10
+- **Test Requirements**:
+  - `programmatic` TR-4.1: 新生成的卡密有 card_no_encrypted 字段
+  - `programmatic` TR-4.2: 发卡能正确返回卡密明文
+  - `programmatic` TR-4.3: 购买 3 份返回 3 张卡密，库存减 3
+  - `programmatic` TR-4.4: quantity > 100 被拒绝
+  - `programmatic` TR-4.5: 禁用商户的店铺不能下单
+  - `programmatic` TR-4.6: 订单表有 buyer_ip 和 device_id 字段
+- **Notes**: 数据库迁移需保证可逆；历史卡密无明文，只能新卡密支持发卡
+
+## [ ] Task 5: 支付与资金并发修复
+- **Priority**: high
+- **Depends On**: Task 1
+- **Description**:
+  - 余额支付：钱包查询加 lock(true) 行锁，整个扣减放事务内
+  - 支付回调：读取订单加 lock(true)，幂等检查后再处理
+  - processOrderPaid 移入事务内（发卡、加佣金、加商户余额都在同一事务）
+  - 商品库存扣减改用 ShopProduct::where()->dec('stock', $qty) 原子操作
+  - 佣金 D+1 结算：用条件更新确保幂等（WHERE settle_status=0 UPDATE settle_status=1）
+  - 退款扣回佣金：校验余额，不足记为待追缴，不让余额变负
+  - 订单号生成改用 \app\library\Random::numeric(6)
+  - closeExpiredOrders 分批处理，用条件 update 抢占式关闭
+- **Acceptance Criteria Addressed**: AC-6, AC-10
+- **Test Requirements**:
+  - `programmatic` TR-5.1: 余额支付使用行锁
+  - `programmatic` TR-5.2: 支付回调使用行锁且幂等
+  - `programmatic` TR-5.3: processOrderPaid 在事务内
+  - `programmatic` TR-5.4: 库存扣减使用 DEC 原子操作
+  - `programmatic` TR-5.5: 佣金结算使用条件更新保证幂等
+  - `programmatic` TR-5.6: 订单号使用安全随机数
+- **Notes**: 所有资金操作必须在事务内，确保一致性
+
+## [ ] Task 6: 架构与部署修复
+- **Priority**: high
+- **Depends On**: Task 1
+- **Description**:
+  - 修复 Nginx 生产配置 /api/ 代理错误：删除 proxy_pass 行，只保留 fastcgi_pass
+  - Nginx 增加安全响应头（HSTS、X-Frame-Options、X-Content-Type-Options、Referrer-Policy）
+  - 创建 SecurityHeadersMiddleware 全局中间件，添加同样的安全头
+  - 注册接口路由绑定 LoginThrottleMiddleware 限流
+  - AdminMenuSeeder 与 permission.php 权限配置对齐：
+    - 修正 component 路径
+    - 修正权限名（system:logs → system:log 等）
+    - 移除不存在的模块（finance、content）
+    - 改用 INSERT IGNORE 或先 truncate 再 insert
+  - 卡密导入弹窗重写：
+    - 改用独立的 el-dialog + el-form 组件
+    - 移除 dangerouslyUseHTMLString
+    - 移除 document.getElementById 直接 DOM 操作
+- **Acceptance Criteria Addressed**: AC-7, AC-10
+- **Test Requirements**:
+  - `programmatic` TR-6.1: Nginx 生产配置 /api/ 只有 fastcgi_pass
+  - `programmatic` TR-6.2: 响应头包含安全相关 header
+  - `programmatic` TR-6.3: 注册接口有限流中间件
+  - `programmatic` TR-6.4: AdminMenuSeeder 权限名与 permission.php 一致
+  - `programmatic` TR-6.5: 卡密导入弹窗不使用 dangerouslyUseHTMLString
+  - `human-judgement` TR-6.6: 导入弹窗交互正常，可选择应用和卡类型
+- **Notes**: Nginx 配置修改需测试语法正确性
+
+## [ ] Task 7: 其他高优先级修复
+- **Priority**: medium
+- **Depends On**: Task 1
+- **Description**:
+  - CaihongPay 移除 CURLOPT_SSL_VERIFYPEER=false 和 CURLOPT_SSL_VERIFYHOST=false，开启 SSL 验证
+  - CaihongPay 签名验证改用 hash_equals
+  - 登录风控：增加 IP 维度，username 统一 strtolower
+  - 卡密激活、续费、设备绑定方法加事务+行锁
+  - 前端 userStore token 存储改 sessionStorage
+  - 卡密列表统计 6 次 COUNT 改用 GROUP BY 单条查询
+  - 卡密导出 CSV 加 UTF-8 BOM
+  - 卡密 void 不物理删除设备，只置 is_online=0 + unbind_time
+- **Acceptance Criteria Addressed**: AC-10
+- **Test Requirements**:
+  - `programmatic` TR-7.1: CaihongPay 开启 SSL 验证
+  - `programmatic` TR-7.2: 登录风控按 username+ip 双维度
+  - `programmatic` TR-7.3: 卡密激活/续费使用事务+行锁
+  - `programmatic` TR-7.4: 前端 token 存在 sessionStorage
+  - `programmatic` TR-7.5: 卡密列表统计使用 GROUP BY
+  - `programmatic` TR-7.6: CSV 导出有 BOM 头
+- **Notes**: 这些是重要但不阻断的问题
+
+## [ ] Task 8: 最终验证与推送
+- **Priority**: high
+- **Depends On**: Task 2, Task 3, Task 4, Task 5, Task 6, Task 7
+- **Description**:
+  - 全量 PHP 语法检查
+  - 前端 build 验证
+  - 数据库迁移文件语法检查
+  - 路由配置完整性检查
+  - 提交代码并推送到 GitHub main 分支
+  - 更新 README 修复说明
+- **Acceptance Criteria Addressed**: AC-10
+- **Test Requirements**:
+  - `programmatic` TR-8.1: 所有 PHP 文件语法检查通过
+  - `programmatic` TR-8.2: 前端 npm run build 成功
+  - `programmatic` TR-8.3: 代码成功推送到 GitHub main
+  - `human-judgement` TR-8.4: 所有 Critical 问题都已修复
+- **Notes**: 最终集成验证，确保无回归

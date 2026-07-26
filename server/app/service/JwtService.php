@@ -28,6 +28,10 @@ class JwtService
         $this->refreshExpire  = (int) Config::get('jwt.refresh_expire', 604800);
         $this->algorithm      = Config::get('jwt.algorithm', 'HS256');
         $this->blacklistPrefix = Config::get('jwt.blacklist_prefix', 'jwt_blacklist:');
+
+        if (empty($this->secret) || strlen($this->secret) < 32) {
+            throw new \RuntimeException('JWT secret must be configured and at least 32 characters long');
+        }
     }
 
     public function generateToken(array $payload, bool $isRefresh = false): string

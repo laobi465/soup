@@ -37,6 +37,7 @@ class CardApiController extends BaseController
         $card = CardService::getCardByHash($cardNoHash, $appId);
 
         if (!$card) {
+            CardService::recordBruteForceFailByHash($cardNoHash, $ip);
             $this->logApi($request, 'verify', 0, 4101);
             return $this->apiError(4101, '卡密不存在');
         }
@@ -48,7 +49,6 @@ class CardApiController extends BaseController
 
         if ($card->status == Card::STATUS_UNUSED) {
             $this->logApi($request, 'verify', $card->id, 4102);
-            CardService::recordBruteForceFail($card->id, $ip);
             return $this->apiError(4102, '卡密未激活');
         }
 
@@ -63,12 +63,14 @@ class CardApiController extends BaseController
         }
 
         if ($card->isExpired() && !$card->isSoftExpired()) {
+            CardService::recordBruteForceFail($card->id, $ip);
             $this->logApi($request, 'verify', $card->id, 4103);
             return $this->apiError(4103, '卡密已到期');
         }
 
         $app = App::find($card->app_id);
         if (!$app || $app->status != 1) {
+            CardService::recordBruteForceFail($card->id, $ip);
             $this->logApi($request, 'verify', $card->id, 4107);
             return $this->apiError(4107, '应用已停用');
         }
@@ -76,6 +78,7 @@ class CardApiController extends BaseController
         if (!empty($deviceFingerprint)) {
             $bindResult = CardService::bindDevice($card->id, $deviceFingerprint, $deviceName);
             if (!$bindResult['success']) {
+                CardService::recordBruteForceFail($card->id, $ip);
                 $this->logApi($request, 'verify', $card->id, $bindResult['code'] ?? 4106);
                 return $this->apiError($bindResult['code'] ?? 4106, $bindResult['message']);
             }
@@ -128,6 +131,7 @@ class CardApiController extends BaseController
         $card = CardService::getCardByHash($cardNoHash, $appId);
 
         if (!$card) {
+            CardService::recordBruteForceFailByHash($cardNoHash, $ip);
             $this->logApi($request, 'activate', 0, 4101);
             return $this->apiError(4101, '卡密不存在');
         }
@@ -138,17 +142,20 @@ class CardApiController extends BaseController
         }
 
         if ($card->status == Card::STATUS_BANNED) {
+            CardService::recordBruteForceFail($card->id, $ip);
             $this->logApi($request, 'activate', $card->id, 4104);
             return $this->apiError(4104, '卡密已封禁');
         }
 
         if ($card->status == Card::STATUS_VOIDED) {
+            CardService::recordBruteForceFail($card->id, $ip);
             $this->logApi($request, 'activate', $card->id, 4105);
             return $this->apiError(4105, '卡密已作废');
         }
 
         $app = App::find($card->app_id);
         if (!$app || $app->status != 1) {
+            CardService::recordBruteForceFail($card->id, $ip);
             $this->logApi($request, 'activate', $card->id, 4107);
             return $this->apiError(4107, '应用已停用');
         }
@@ -156,7 +163,7 @@ class CardApiController extends BaseController
         $result = CardService::activateCard($cardNo, $appId, $deviceFingerprint, $deviceName);
 
         if (!$result['success']) {
-            if (in_array($result['code'] ?? 0, [4102, 4101])) {
+            if (in_array($result['code'] ?? 0, [4102, 4106])) {
                 CardService::recordBruteForceFail($card->id, $ip);
             }
             $this->logApi($request, 'activate', $card->id, $result['code'] ?? 400);
@@ -346,19 +353,39 @@ class CardApiController extends BaseController
             $appId = $request->app_id ?? 0;
             $ip = $request->ip();
             $device = $request->param('device_fingerprint', '') ?: ($request->param('device', '') ?? '');
-            $requestData = json_encode($request->param(), JSON_UNESCAPED_UNICODE);
+
+            $requestData = $request->param();
+            if (isset($requestData['card_no']) && is_string($requestData['card_no'])) {
+                $requestData['card_no'] = $this->maskCardNo($requestData['card_no']);
+            }
+            if (isset($requestData['device_fingerprint']) && is_string($requestData['device_fingerprint'])) {
+                $requestData['device_fingerprint'] = sha1($requestData['device_fingerprint']);
+            }
+            $requestDataJson = json_encode($requestData, JSON_UNESCAPED_UNICODE);
 
             $log = new ApiLog();
             $log->app_id = $appId;
             $log->card_id = $cardId;
             $log->ip = $ip;
-            $log->device = $device;
+            $log->device = $device ? sha1($device) : '';
             $log->api_type = $apiType;
-            $log->request_data = $requestData;
+            $log->request_data = $requestDataJson;
             $log->response_code = $responseCode;
             $log->cost_ms = $costMs;
             $log->save();
         } catch (\Exception $e) {
         }
+    }
+
+    protected function maskCardNo(string $cardNo): string
+    {
+        $length = strlen($cardNo);
+        if ($length <= 8) {
+            return $cardNo;
+        }
+        $prefix = substr($cardNo, 0, 4);
+        $suffix = substr($cardNo, -4);
+        $maskLength = $length - 8;
+        return $prefix . str_repeat('*', $maskLength) . $suffix;
     }
 }

@@ -1,7 +1,7 @@
 <?php
 
 return [
-    'secret'         => env('jwt.secret', 'your-jwt-secret-key'),
+    'secret'         => env('jwt.secret', ''),
     'expire'         => (int) env('jwt.expire', 7200),
     'refresh_expire' => (int) env('jwt.refresh_expire', 604800),
     'algorithm'      => 'HS256',

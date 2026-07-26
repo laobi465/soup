@@ -30,6 +30,11 @@ class AppController extends BaseController
 
         $query = App::where('merchant_id', $merchantId);
 
+        $appIds = $request->app_ids ?? null;
+        if (!empty($appIds) && is_array($appIds)) {
+            $query->whereIn('id', $appIds);
+        }
+
         if ($keyword !== '') {
             $query->where(function ($q) use ($keyword) {
                 $q->whereLike('name', '%' . $keyword . '%')

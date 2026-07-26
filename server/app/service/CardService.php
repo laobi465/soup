@@ -4,6 +4,7 @@ declare (strict_types = 1);
 namespace app\service;
 
 use app\library\Random;
+use app\library\AesEncrypt;
 use app\model\Card;
 use app\model\CardBatch;
 use app\model\Device;
@@ -21,6 +22,8 @@ class CardService
     const BRUTE_FORCE_PREFIX = 'bruteforce:';
     const BRUTE_FORCE_LIMIT = 15;
     const BRUTE_FORCE_WINDOW = 300;
+    const BRUTE_FORCE_IP_LIMIT = 100;
+    const BRUTE_FORCE_IP_WINDOW = 300;
 
     public static function generateCardNo(string $prefix = '', int $length = 16, string $charset = ''): string
     {
@@ -93,6 +96,7 @@ class CardService
                     'app_id' => $appId,
                     'merchant_id' => $merchantId,
                     'card_no_hash' => $cardNoHash,
+                    'card_no_encrypted' => AesEncrypt::encrypt($cardNo),
                     'card_no_prefix' => $prefix,
                     'card_type' => $cardType,
                     'duration' => $duration,
@@ -236,77 +240,90 @@ class CardService
 
     public static function bindDevice(int $cardId, string $deviceFingerprint, string $deviceName = ''): array
     {
-        $card = Card::find($cardId);
-        if (!$card) {
-            return [
-                'success' => false,
-                'code' => 4101,
-                'message' => '卡密不存在',
-            ];
-        }
-
-        $app = App::find($card->app_id);
-        if (!$app) {
-            return [
-                'success' => false,
-                'code' => 4107,
-                'message' => '应用不存在',
-            ];
-        }
-
-        $existingDevice = Device::where('card_id', $cardId)
-            ->where('device_fingerprint', $deviceFingerprint)
-            ->find();
-
-        if ($existingDevice) {
-            $existingDevice->last_heartbeat = date('Y-m-d H:i:s');
-            $existingDevice->is_online = 1;
-            if ($deviceName && !$existingDevice->device_name) {
-                $existingDevice->device_name = $deviceName;
+        Db::startTrans();
+        try {
+            $card = Card::where('id', $cardId)->lock(true)->find();
+            if (!$card) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'code' => 4101,
+                    'message' => '卡密不存在',
+                ];
             }
-            $existingDevice->save();
+
+            $app = App::find($card->app_id);
+            if (!$app) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'code' => 4107,
+                    'message' => '应用不存在',
+                ];
+            }
+
+            $existingDevice = Device::where('card_id', $cardId)
+                ->where('device_fingerprint', $deviceFingerprint)
+                ->find();
+
+            if ($existingDevice) {
+                $existingDevice->last_heartbeat = date('Y-m-d H:i:s');
+                $existingDevice->is_online = 1;
+                if ($deviceName && !$existingDevice->device_name) {
+                    $existingDevice->device_name = $deviceName;
+                }
+                $existingDevice->save();
+
+                Db::commit();
+
+                return [
+                    'success' => true,
+                    'code' => 0,
+                    'message' => '设备已绑定',
+                    'data' => [
+                        'device_id' => $existingDevice->id,
+                        'is_new' => false,
+                    ],
+                ];
+            }
+
+            $deviceCount = Device::where('card_id', $cardId)->count();
+            if ($deviceCount >= $app->bind_limit) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'code' => 4106,
+                    'message' => '设备绑定数达上限',
+                ];
+            }
+
+            $device = new Device();
+            $device->card_id = $cardId;
+            $device->app_id = $card->app_id;
+            $device->device_fingerprint = $deviceFingerprint;
+            $device->device_name = $deviceName;
+            $device->bind_time = date('Y-m-d H:i:s');
+            $device->last_heartbeat = date('Y-m-d H:i:s');
+            $device->is_online = 1;
+            $device->save();
+
+            self::clearCardCache($card->card_no_hash);
+
+            Db::commit();
 
             return [
                 'success' => true,
                 'code' => 0,
-                'message' => '设备已绑定',
+                'message' => '设备绑定成功',
                 'data' => [
-                    'device_id' => $existingDevice->id,
-                    'is_new' => false,
+                    'device_id' => $device->id,
+                    'is_new' => true,
                 ],
             ];
+        } catch (\Exception $e) {
+            Db::rollback();
+            throw $e;
         }
-
-        $deviceCount = Device::where('card_id', $cardId)->count();
-        if ($deviceCount >= $app->bind_limit) {
-            return [
-                'success' => false,
-                'code' => 4106,
-                'message' => '设备绑定数达上限',
-            ];
-        }
-
-        $device = new Device();
-        $device->card_id = $cardId;
-        $device->app_id = $card->app_id;
-        $device->device_fingerprint = $deviceFingerprint;
-        $device->device_name = $deviceName;
-        $device->bind_time = date('Y-m-d H:i:s');
-        $device->last_heartbeat = date('Y-m-d H:i:s');
-        $device->is_online = 1;
-        $device->save();
-
-        self::clearCardCache($card->card_no_hash);
-
-        return [
-            'success' => true,
-            'code' => 0,
-            'message' => '设备绑定成功',
-            'data' => [
-                'device_id' => $device->id,
-                'is_new' => true,
-            ],
-        ];
     }
 
     public static function unbindDevice(int $cardId, int $deviceId): bool
@@ -331,129 +348,157 @@ class CardService
     public static function activateCard(string $cardNo, int $appId, string $deviceFingerprint, string $deviceName = ''): array
     {
         $cardNoHash = self::hashCardNo($cardNo);
-        $card = self::getCardByHash($cardNoHash, $appId);
 
-        if (!$card) {
-            return [
-                'success' => false,
-                'code' => 4101,
-                'message' => '卡密不存在',
-            ];
-        }
+        Db::startTrans();
+        try {
+            $card = Card::where('card_no_hash', $cardNoHash)
+                ->where('app_id', $appId)
+                ->lock(true)
+                ->find();
 
-        if ($card->status == Card::STATUS_BANNED) {
-            return [
-                'success' => false,
-                'code' => 4104,
-                'message' => '卡密已封禁',
-            ];
-        }
-
-        if ($card->status == Card::STATUS_VOIDED) {
-            return [
-                'success' => false,
-                'code' => 4105,
-                'message' => '卡密已作废',
-            ];
-        }
-
-        $app = App::find($card->app_id);
-        if (!$app || $app->status != 1) {
-            return [
-                'success' => false,
-                'code' => 4107,
-                'message' => '应用已停用',
-            ];
-        }
-
-        if ($card->status == Card::STATUS_UNUSED) {
-            $card->status = Card::STATUS_ACTIVATED;
-            $card->activate_time = date('Y-m-d H:i:s');
-            if ($card->card_type != Card::TYPE_PERMANENT) {
-                $expireTime = time() + $card->duration;
-                $card->expire_time = date('Y-m-d H:i:s', $expireTime);
-                $card->soft_expire_until = date('Y-m-d H:i:s', $expireTime + 86400 * 7);
+            if (!$card) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'code' => 4101,
+                    'message' => '卡密不存在',
+                ];
             }
-            $card->save();
-            self::clearCardCache($cardNoHash);
-        }
 
-        $bindResult = self::bindDevice($card->id, $deviceFingerprint, $deviceName);
-        if (!$bindResult['success']) {
-            return $bindResult;
-        }
+            if ($card->status == Card::STATUS_BANNED) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'code' => 4104,
+                    'message' => '卡密已封禁',
+                ];
+            }
 
-        $remainingDuration = 0;
-        if ($card->card_type != Card::TYPE_PERMANENT && $card->expire_time) {
-            $remainingDuration = max(0, strtotime($card->expire_time) - time());
-        }
+            if ($card->status == Card::STATUS_VOIDED) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'code' => 4105,
+                    'message' => '卡密已作废',
+                ];
+            }
 
-        return [
-            'success' => true,
-            'code' => 0,
-            'message' => '激活成功',
-            'data' => [
-                'card_id' => $card->id,
-                'card_type' => $card->card_type,
-                'status' => $card->status,
-                'expire_time' => $card->expire_time,
-                'remaining_duration' => $remainingDuration,
-                'device_id' => $bindResult['data']['device_id'],
-                'is_new_activate' => $bindResult['data']['is_new'] ?? false,
-            ],
-        ];
+            $app = App::find($card->app_id);
+            if (!$app || $app->status != 1) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'code' => 4107,
+                    'message' => '应用已停用',
+                ];
+            }
+
+            if ($card->status == Card::STATUS_UNUSED) {
+                $card->status = Card::STATUS_ACTIVATED;
+                $card->activate_time = date('Y-m-d H:i:s');
+                if ($card->card_type != Card::TYPE_PERMANENT) {
+                    $expireTime = time() + $card->duration;
+                    $card->expire_time = date('Y-m-d H:i:s', $expireTime);
+                    $card->soft_expire_until = date('Y-m-d H:i:s', $expireTime + 86400 * 7);
+                }
+                $card->save();
+                self::clearCardCache($cardNoHash);
+            }
+
+            $bindResult = self::bindDevice($card->id, $deviceFingerprint, $deviceName);
+            if (!$bindResult['success']) {
+                Db::rollback();
+                return $bindResult;
+            }
+
+            $remainingDuration = 0;
+            if ($card->card_type != Card::TYPE_PERMANENT && $card->expire_time) {
+                $remainingDuration = max(0, strtotime($card->expire_time) - time());
+            }
+
+            Db::commit();
+
+            return [
+                'success' => true,
+                'code' => 0,
+                'message' => '激活成功',
+                'data' => [
+                    'card_id' => $card->id,
+                    'card_type' => $card->card_type,
+                    'status' => $card->status,
+                    'expire_time' => $card->expire_time,
+                    'remaining_duration' => $remainingDuration,
+                    'device_id' => $bindResult['data']['device_id'],
+                    'is_new_activate' => $bindResult['data']['is_new'] ?? false,
+                ],
+            ];
+        } catch (\Exception $e) {
+            Db::rollback();
+            throw $e;
+        }
     }
 
     public static function renewCard(int $cardId, int $duration): array
     {
-        $card = Card::find($cardId);
-        if (!$card) {
+        Db::startTrans();
+        try {
+            $card = Card::where('id', $cardId)->lock(true)->find();
+            if (!$card) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'code' => 4101,
+                    'message' => '卡密不存在',
+                ];
+            }
+
+            if ($card->status == Card::STATUS_VOIDED) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'message' => '作废卡密无法续费',
+                ];
+            }
+
+            if ($card->card_type == Card::TYPE_PERMANENT) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'message' => '永久卡无需续费',
+                ];
+            }
+
+            $now = time();
+            $currentExpire = $card->expire_time ? strtotime($card->expire_time) : $now;
+            $baseTime = max($now, $currentExpire);
+            $newExpire = $baseTime + $duration;
+
+            $card->duration += $duration;
+            $card->expire_time = date('Y-m-d H:i:s', $newExpire);
+            $card->soft_expire_until = date('Y-m-d H:i:s', $newExpire + 86400 * 7);
+
+            if ($card->status == Card::STATUS_EXPIRED) {
+                $card->status = Card::STATUS_ACTIVATED;
+            }
+
+            $card->save();
+            self::clearCardCache($card->card_no_hash);
+
+            Db::commit();
+
             return [
-                'success' => false,
-                'code' => 4101,
-                'message' => '卡密不存在',
+                'success' => true,
+                'code' => 0,
+                'message' => '续费成功',
+                'data' => [
+                    'expire_time' => $card->expire_time,
+                    'duration' => $card->duration,
+                ],
             ];
+        } catch (\Exception $e) {
+            Db::rollback();
+            throw $e;
         }
-
-        if ($card->status == Card::STATUS_VOIDED) {
-            return [
-                'success' => false,
-                'message' => '作废卡密无法续费',
-            ];
-        }
-
-        if ($card->card_type == Card::TYPE_PERMANENT) {
-            return [
-                'success' => false,
-                'message' => '永久卡无需续费',
-            ];
-        }
-
-        $now = time();
-        $currentExpire = $card->expire_time ? strtotime($card->expire_time) : $now;
-        $baseTime = max($now, $currentExpire);
-        $newExpire = $baseTime + $duration;
-
-        $card->duration += $duration;
-        $card->expire_time = date('Y-m-d H:i:s', $newExpire);
-        $card->soft_expire_until = date('Y-m-d H:i:s', $newExpire + 86400 * 7);
-
-        if ($card->status == Card::STATUS_EXPIRED) {
-            $card->status = Card::STATUS_ACTIVATED;
-        }
-
-        $card->save();
-        self::clearCardCache($card->card_no_hash);
-
-        return [
-            'success' => true,
-            'code' => 0,
-            'message' => '续费成功',
-            'data' => [
-                'expire_time' => $card->expire_time,
-                'duration' => $card->duration,
-            ],
-        ];
     }
 
     public static function banCard(int $cardId, string $reason = ''): array
@@ -550,7 +595,10 @@ class CardService
 
         self::clearCardCache($card->card_no_hash);
 
-        Device::where('card_id', $cardId)->delete();
+        Device::where('card_id', $cardId)->update([
+            'is_online' => 0,
+            'unbind_time' => date('Y-m-d H:i:s'),
+        ]);
 
         return [
             'success' => true,
@@ -561,8 +609,52 @@ class CardService
 
     public static function checkBruteForce(int $cardId, string $ip): bool
     {
-        $key = self::BRUTE_FORCE_PREFIX . $cardId . ':' . $ip;
-        $failCount = Cache::get($key, 0);
+        $ipKey = self::BRUTE_FORCE_PREFIX . 'ip:' . $ip;
+        try {
+            $redis = Cache::store('redis')->handler();
+            $ipFailCount = $redis->get($ipKey) ?: 0;
+        } catch (\Exception $e) {
+            $ipFailCount = Cache::get($ipKey, 0);
+        }
+        if ($ipFailCount >= self::BRUTE_FORCE_IP_LIMIT) {
+            return false;
+        }
+
+        $cardKey = self::BRUTE_FORCE_PREFIX . $cardId . ':' . $ip;
+        try {
+            $redis = Cache::store('redis')->handler();
+            $failCount = $redis->get($cardKey) ?: 0;
+        } catch (\Exception $e) {
+            $failCount = Cache::get($cardKey, 0);
+        }
+
+        if ($failCount >= self::BRUTE_FORCE_LIMIT) {
+            return false;
+        }
+
+        return true;
+    }
+
+    public static function checkBruteForceByHash(string $cardHash, string $ip): bool
+    {
+        $ipKey = self::BRUTE_FORCE_PREFIX . 'ip:' . $ip;
+        try {
+            $redis = Cache::store('redis')->handler();
+            $ipFailCount = $redis->get($ipKey) ?: 0;
+        } catch (\Exception $e) {
+            $ipFailCount = Cache::get($ipKey, 0);
+        }
+        if ($ipFailCount >= self::BRUTE_FORCE_IP_LIMIT) {
+            return false;
+        }
+
+        $cardKey = self::BRUTE_FORCE_PREFIX . 'hash:' . $cardHash . ':' . $ip;
+        try {
+            $redis = Cache::store('redis')->handler();
+            $failCount = $redis->get($cardKey) ?: 0;
+        } catch (\Exception $e) {
+            $failCount = Cache::get($cardKey, 0);
+        }
 
         if ($failCount >= self::BRUTE_FORCE_LIMIT) {
             return false;
@@ -573,20 +665,70 @@ class CardService
 
     public static function recordBruteForceFail(int $cardId, string $ip): void
     {
-        $key = self::BRUTE_FORCE_PREFIX . $cardId . ':' . $ip;
-        $failCount = Cache::get($key, 0);
-        $failCount++;
-        Cache::set($key, $failCount, self::BRUTE_FORCE_WINDOW);
+        $ipKey = self::BRUTE_FORCE_PREFIX . 'ip:' . $ip;
+        try {
+            $redis = Cache::store('redis')->handler();
+            $ipFailCount = $redis->incr($ipKey);
+            if ($ipFailCount == 1) {
+                $redis->expire($ipKey, self::BRUTE_FORCE_IP_WINDOW);
+            }
+        } catch (\Exception $e) {
+            $ipFailCount = Cache::get($ipKey, 0);
+            $ipFailCount++;
+            Cache::set($ipKey, $ipFailCount, self::BRUTE_FORCE_IP_WINDOW);
+        }
+
+        $cardKey = self::BRUTE_FORCE_PREFIX . $cardId . ':' . $ip;
+        try {
+            $redis = Cache::store('redis')->handler();
+            $failCount = $redis->incr($cardKey);
+            if ($failCount == 1) {
+                $redis->expire($cardKey, self::BRUTE_FORCE_WINDOW);
+            }
+        } catch (\Exception $e) {
+            $failCount = Cache::get($cardKey, 0);
+            $failCount++;
+            Cache::set($cardKey, $failCount, self::BRUTE_FORCE_WINDOW);
+        }
 
         if ($failCount >= self::BRUTE_FORCE_LIMIT) {
             self::banCard($cardId, '防爆破自动封禁');
         }
     }
 
+    public static function recordBruteForceFailByHash(string $cardHash, string $ip): void
+    {
+        $ipKey = self::BRUTE_FORCE_PREFIX . 'ip:' . $ip;
+        try {
+            $redis = Cache::store('redis')->handler();
+            $ipFailCount = $redis->incr($ipKey);
+            if ($ipFailCount == 1) {
+                $redis->expire($ipKey, self::BRUTE_FORCE_IP_WINDOW);
+            }
+        } catch (\Exception $e) {
+            $ipFailCount = Cache::get($ipKey, 0);
+            $ipFailCount++;
+            Cache::set($ipKey, $ipFailCount, self::BRUTE_FORCE_IP_WINDOW);
+        }
+
+        $cardKey = self::BRUTE_FORCE_PREFIX . 'hash:' . $cardHash . ':' . $ip;
+        try {
+            $redis = Cache::store('redis')->handler();
+            $failCount = $redis->incr($cardKey);
+            if ($failCount == 1) {
+                $redis->expire($cardKey, self::BRUTE_FORCE_WINDOW);
+            }
+        } catch (\Exception $e) {
+            $failCount = Cache::get($cardKey, 0);
+            $failCount++;
+            Cache::set($cardKey, $failCount, self::BRUTE_FORCE_WINDOW);
+        }
+    }
+
     public static function clearBruteForce(int $cardId, string $ip): void
     {
-        $key = self::BRUTE_FORCE_PREFIX . $cardId . ':' . $ip;
-        Cache::delete($key);
+        $cardKey = self::BRUTE_FORCE_PREFIX . $cardId . ':' . $ip;
+        Cache::delete($cardKey);
     }
 
     public static function heartbeat(string $cardNo, int $appId, string $deviceFingerprint): array
@@ -686,6 +828,7 @@ class CardService
                 $card->app_id = $appId;
                 $card->merchant_id = $merchantId;
                 $card->card_no_hash = $cardNoHash;
+                $card->card_no_encrypted = AesEncrypt::encrypt($cardNo);
                 $card->card_no_prefix = $prefix;
                 $card->card_type = $cardType;
                 $card->duration = $duration;

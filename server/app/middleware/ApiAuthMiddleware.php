@@ -44,10 +44,18 @@ class ApiAuthMiddleware
         }
 
         $nonceKey = 'api_nonce:' . $appKey . ':' . $nonce;
-        if (Cache::has($nonceKey)) {
-            return $this->errorResponse(4003, 'Nonce重复');
+        try {
+            $redis = Cache::store('redis')->handler();
+            $result = $redis->set($nonceKey, 1, ['nx', 'ex' => self::NONCE_TTL]);
+            if (!$result) {
+                return $this->errorResponse(4003, 'Nonce重复');
+            }
+        } catch (\Exception $e) {
+            if (Cache::has($nonceKey)) {
+                return $this->errorResponse(4003, 'Nonce重复');
+            }
+            Cache::set($nonceKey, 1, self::NONCE_TTL);
         }
-        Cache::set($nonceKey, 1, self::NONCE_TTL);
 
         if (empty($sign)) {
             return $this->errorResponse(4001, '签名不能为空');
@@ -55,7 +63,7 @@ class ApiAuthMiddleware
 
         $appSecret = AesEncrypt::decrypt($app->app_secret_encrypted);
         if (!$appSecret) {
-            $appSecret = $app->app_secret_hash;
+            return $this->errorResponse(500, 'AppSecret配置错误');
         }
 
         $method = strtoupper($request->method());

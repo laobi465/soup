@@ -9,7 +9,10 @@ class AesEncrypt
 
     protected static function getKey(): string
     {
-        $key = config('app.app_secret_key', env('APP_SECRET_KEY', 'default_secret_key_change_me'));
+        $key = config('app.app_secret_key', env('APP_SECRET_KEY', ''));
+        if (empty($key) || strlen($key) < 16) {
+            throw new \RuntimeException('AES secret key must be configured and at least 16 characters long');
+        }
         return hash('sha256', $key, true);
     }
 

@@ -16,14 +16,14 @@ Route::group('api/admin', function () {
         Route::post('', 'admin.PackageController/save');
         Route::put(':id', 'admin.PackageController/update');
         Route::delete(':id', 'admin.PackageController/delete');
-    })->middleware([\app\middleware\PermissionMiddleware::class]);
+    })->middleware([\app\middleware\PermissionMiddleware::class . ':package:manage']);
 
     Route::group('apps', function () {
         Route::get('', 'admin.AppController/index');
         Route::get(':id', 'admin.AppController/read');
         Route::put(':id/status', 'admin.AppController/updateStatus');
         Route::delete(':id', 'admin.AppController/delete');
-    })->middleware([\app\middleware\PermissionMiddleware::class]);
+    })->middleware([\app\middleware\PermissionMiddleware::class . ':app:manage']);
 
     Route::group('merchants', function () {
         Route::get('', 'admin.MerchantController/index');
@@ -32,25 +32,25 @@ Route::group('api/admin', function () {
         Route::put(':id/reset-password', 'admin.MerchantController/resetPassword');
         Route::put(':id/adjust-quota', 'admin.MerchantController/adjustQuota');
         Route::put(':id/change-package', 'admin.MerchantController/changePackage');
-    })->middleware([\app\middleware\PermissionMiddleware::class]);
+    })->middleware([\app\middleware\PermissionMiddleware::class . ':merchant:manage']);
 
     Route::group('cards', function () {
         Route::get('', 'admin.CardController/index');
         Route::get(':id', 'admin.CardController/read');
         Route::put(':id/ban', 'admin.CardController/ban');
         Route::put(':id/unban', 'admin.CardController/unban');
-    })->middleware([\app\middleware\PermissionMiddleware::class]);
+    })->middleware([\app\middleware\PermissionMiddleware::class . ':card:manage']);
 
     Route::group('payment', function () {
         Route::get('config', 'admin.PaymentController/getConfig');
         Route::put('config', 'admin.PaymentController/updateConfig');
-    })->middleware([\app\middleware\PermissionMiddleware::class]);
+    })->middleware([\app\middleware\PermissionMiddleware::class . ':payment:manage']);
 
     Route::group('orders', function () {
         Route::get('', 'admin.PaymentController/orders');
         Route::get(':id', 'admin.PaymentController/orderDetail');
         Route::post('refund', 'admin.PaymentController/refund');
-    })->middleware([\app\middleware\PermissionMiddleware::class]);
+    })->middleware([\app\middleware\PermissionMiddleware::class . ':order:manage']);
 
     Route::group('dashboard', function () {
         Route::get('', 'admin.DashboardController/index');
@@ -68,20 +68,20 @@ Route::group('api/admin', function () {
         Route::delete('blacklist/:id', 'admin.RiskController/blacklistDelete');
         Route::get('alerts', 'admin.RiskController/alerts');
         Route::get('overview', 'admin.RiskController/overview');
-    })->middleware([\app\middleware\PermissionMiddleware::class]);
+    })->middleware([\app\middleware\PermissionMiddleware::class . ':risk:manage']);
 
     Route::group('logs', function () {
         Route::get('operation', 'admin.LogController/operation');
         Route::get('login', 'admin.LogController/login');
         Route::get('api', 'admin.LogController/api');
-    })->middleware([\app\middleware\PermissionMiddleware::class]);
+    })->middleware([\app\middleware\PermissionMiddleware::class . ':system:log']);
 
     Route::group('config', function () {
         Route::get('', 'admin.SystemConfigController/index');
         Route::get('group', 'admin.SystemConfigController/getByGroup');
         Route::put('', 'admin.SystemConfigController/save');
         Route::post('clear-cache', 'admin.SystemConfigController/clearCache');
-    })->middleware([\app\middleware\PermissionMiddleware::class]);
+    })->middleware([\app\middleware\PermissionMiddleware::class . ':system:config']);
 
     Route::group('announcements', function () {
         Route::get('', 'admin.AnnouncementController/index');
@@ -90,7 +90,7 @@ Route::group('api/admin', function () {
         Route::put(':id', 'admin.AnnouncementController/update');
         Route::delete(':id', 'admin.AnnouncementController/delete');
         Route::put(':id/status', 'admin.AnnouncementController/updateStatus');
-    })->middleware([\app\middleware\PermissionMiddleware::class]);
+    })->middleware([\app\middleware\PermissionMiddleware::class . ':content:announcement']);
 
     Route::group('tickets', function () {
         Route::get('', 'admin.TicketController/index');
@@ -99,7 +99,7 @@ Route::group('api/admin', function () {
         Route::post(':id/reply', 'admin.TicketController/reply');
         Route::put(':id/status', 'admin.TicketController/updateStatus');
         Route::put(':id/assign', 'admin.TicketController/assign');
-    })->middleware([\app\middleware\PermissionMiddleware::class]);
+    })->middleware([\app\middleware\PermissionMiddleware::class . ':ticket:manage']);
 })->middleware([
     \app\middleware\AuthMiddleware::class,
 ]);
@@ -203,11 +203,14 @@ Route::group('api/merchant', function () {
 })->middleware([
     \app\middleware\AuthMiddleware::class,
     \app\middleware\MerchantStatusMiddleware::class,
+    \app\middleware\PermissionMiddleware::class,
+    \app\middleware\DataPermissionMiddleware::class,
 ]);
 
 Route::group('api', function () {
     Route::group('register', function () {
-        Route::post('merchant', 'api.RegisterController/merchant');
+        Route::post('merchant', 'api.RegisterController/merchant')
+            ->middleware([\app\middleware\LoginThrottleMiddleware::class]);
     });
 
     Route::group('pay/notify', function () {

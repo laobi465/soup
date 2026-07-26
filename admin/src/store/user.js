@@ -5,8 +5,8 @@ import { login as loginApi, logout as logoutApi, getUserInfo as getUserInfoApi, 
 export const useUserStore = defineStore(
   'user',
   () => {
-    const token = ref(localStorage.getItem('token') || '')
-    const refreshToken = ref(localStorage.getItem('refreshToken') || '')
+    const token = ref(sessionStorage.getItem('token') || '')
+    const refreshToken = ref(sessionStorage.getItem('refreshToken') || '')
     const userInfo = ref(JSON.parse(localStorage.getItem('userInfo') || '{}'))
     const menus = ref(JSON.parse(localStorage.getItem('menus') || '[]'))
     const permissions = ref(JSON.parse(localStorage.getItem('permissions') || '[]'))
@@ -16,12 +16,12 @@ export const useUserStore = defineStore(
 
     function setToken(newToken) {
       token.value = newToken
-      localStorage.setItem('token', newToken)
+      sessionStorage.setItem('token', newToken)
     }
 
     function setRefreshToken(newRefreshToken) {
       refreshToken.value = newRefreshToken
-      localStorage.setItem('refreshToken', newRefreshToken)
+      sessionStorage.setItem('refreshToken', newRefreshToken)
     }
 
     function setUserInfo(info) {
@@ -94,8 +94,8 @@ export const useUserStore = defineStore(
       userInfo.value = {}
       menus.value = []
       permissions.value = []
-      localStorage.removeItem('token')
-      localStorage.removeItem('refreshToken')
+      sessionStorage.removeItem('token')
+      sessionStorage.removeItem('refreshToken')
       localStorage.removeItem('userInfo')
       localStorage.removeItem('menus')
       localStorage.removeItem('permissions')

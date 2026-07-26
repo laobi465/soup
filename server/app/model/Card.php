@@ -131,4 +131,12 @@ class Card extends Model
         }
         return strtotime($this->soft_expire_until) >= time();
     }
+
+    public function getPlainCardNo(): ?string
+    {
+        if (empty($this->card_no_encrypted)) {
+            return null;
+        }
+        return \app\library\AesEncrypt::decrypt($this->card_no_encrypted) ?: null;
+    }
 }

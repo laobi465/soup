@@ -32,7 +32,10 @@ class CardController extends BaseController
 
         $query = Card::where('merchant_id', $merchantId);
 
-        if ($appId > 0) {
+        $appIds = $request->app_ids ?? null;
+        if (!empty($appIds) && is_array($appIds)) {
+            $query->whereIn('app_id', $appIds);
+        } elseif ($appId > 0) {
             $query->where('app_id', intval($appId));
         }
 
@@ -475,7 +478,7 @@ class CardController extends BaseController
         }
 
         $filename = 'cards_' . date('YmdHis') . '.csv';
-        $content = '';
+        $content = chr(0xEF) . chr(0xBB) . chr(0xBF);
         foreach ($rows as $row) {
             $content .= implode(',', array_map(function ($v) {
                 return '"' . str_replace('"', '""', $v) . '"';

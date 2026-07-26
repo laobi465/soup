@@ -39,22 +39,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-  queue-worker:
-    build:
-      context: ./docker/php
-      dockerfile: Dockerfile
-    container_name: card-auth-queue
-    volumes:
-      - ./server:/var/www/server
-      - ./docker/php/php-prod.ini:/usr/local/etc/php/php.ini
-    depends_on:
-      - mysql
-      - redis
-    networks:
-      - card-auth-network
-    restart: always
-    command: php think queue:work --daemon --tries=3
-
   scheduler:
     build:
       context: ./docker/php
@@ -63,13 +47,14 @@ services:
     volumes:
       - ./server:/var/www/server
       - ./docker/php/php-prod.ini:/usr/local/etc/php/php.ini
+      - php-logs:/var/log/php
     depends_on:
       - mysql
       - redis
     networks:
       - card-auth-network
     restart: always
-    command: sh -c "while true; do php think schedule:run; sleep 60; done"
+    command: sh -c "mkdir -p /var/log/php && while true; do php think schedule:run >> /var/log/php/scheduler.log 2>&1; sleep 60; done"
 
   mysql:
     image: mysql:8.0
@@ -77,7 +62,7 @@ services:
     ports:
       - "127.0.0.1:3306:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?必须设置MYSQL_ROOT_PASSWORD环境变量}
       MYSQL_DATABASE: card_auth
       MYSQL_CHARSET: utf8mb4
       TZ: Asia/Shanghai

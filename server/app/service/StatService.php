@@ -86,11 +86,16 @@ class StatService
 
         $appCount = App::where('merchant_id', $merchantId)->count();
 
+        $statusCounts = Card::where('merchant_id', $merchantId)
+            ->field('status, COUNT(*) as count')
+            ->group('status')
+            ->column('count', 'status');
+
         $cardStats = [
-            'unused' => Card::where('merchant_id', $merchantId)->where('status', Card::STATUS_UNUSED)->count(),
-            'activated' => Card::where('merchant_id', $merchantId)->where('status', Card::STATUS_ACTIVATED)->count(),
-            'expired' => Card::where('merchant_id', $merchantId)->where('status', Card::STATUS_EXPIRED)->count(),
-            'banned' => Card::where('merchant_id', $merchantId)->where('status', Card::STATUS_BANNED)->count(),
+            'unused' => intval($statusCounts[Card::STATUS_UNUSED] ?? 0),
+            'activated' => intval($statusCounts[Card::STATUS_ACTIVATED] ?? 0),
+            'expired' => intval($statusCounts[Card::STATUS_EXPIRED] ?? 0),
+            'banned' => intval($statusCounts[Card::STATUS_BANNED] ?? 0),
         ];
 
         $merchant = Merchant::find($merchantId);
@@ -180,11 +185,17 @@ class StatService
         $todayEnd = date('Y-m-d 23:59:59');
 
         $total = Card::where('app_id', $appId)->count();
-        $unused = Card::where('app_id', $appId)->where('status', Card::STATUS_UNUSED)->count();
-        $activated = Card::where('app_id', $appId)->where('status', Card::STATUS_ACTIVATED)->count();
-        $expired = Card::where('app_id', $appId)->where('status', Card::STATUS_EXPIRED)->count();
-        $banned = Card::where('app_id', $appId)->where('status', Card::STATUS_BANNED)->count();
-        $voided = Card::where('app_id', $appId)->where('status', Card::STATUS_VOIDED)->count();
+
+        $statusCounts = Card::where('app_id', $appId)
+            ->field('status, COUNT(*) as count')
+            ->group('status')
+            ->column('count', 'status');
+
+        $unused = intval($statusCounts[Card::STATUS_UNUSED] ?? 0);
+        $activated = intval($statusCounts[Card::STATUS_ACTIVATED] ?? 0);
+        $expired = intval($statusCounts[Card::STATUS_EXPIRED] ?? 0);
+        $banned = intval($statusCounts[Card::STATUS_BANNED] ?? 0);
+        $voided = intval($statusCounts[Card::STATUS_VOIDED] ?? 0);
 
         $todayGenerated = Card::where('app_id', $appId)
             ->where('created_at', '>=', $todayStart)

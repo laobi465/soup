@@ -3,6 +3,7 @@ declare (strict_types = 1);
 
 namespace app\service;
 
+use app\library\Random;
 use app\library\payment\drivers\CaihongPay;
 use app\library\payment\PaymentDriver;
 use app\model\Order;
@@ -40,7 +41,7 @@ class PaymentService
 
     public function generateOrderNo(string $prefix = 'P'): string
     {
-        return $prefix . date('YmdHis') . str_pad(strval(mt_rand(0, 999999)), 6, '0', STR_PAD_LEFT);
+        return $prefix . date('YmdHis') . Random::numeric(6);
     }
 
     public function createPaymentOrder(
@@ -72,6 +73,14 @@ class PaymentService
 
         if (!empty($extra['email'])) {
             $order->email = $extra['email'];
+        }
+
+        if (!empty($extra['buyer_ip'])) {
+            $order->buyer_ip = $extra['buyer_ip'];
+        }
+
+        if (!empty($extra['device_id'])) {
+            $order->device_id = $extra['device_id'];
         }
 
         $order->save();
@@ -115,17 +124,19 @@ class PaymentService
     protected function payByBalance(Order $order): array
     {
         $userId = $order->user_id;
-        $wallet = Wallet::where('user_id', $userId)->where('type', 1)->find();
-
-        if (!$wallet || floatval($wallet->balance) < floatval($order->amount)) {
-            return [
-                'success' => false,
-                'message' => '余额不足',
-            ];
-        }
 
         Db::startTrans();
         try {
+            $wallet = Wallet::where('user_id', $userId)->where('type', 1)->lock(true)->find();
+
+            if (!$wallet || floatval($wallet->balance) < floatval($order->amount)) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'message' => '余额不足',
+                ];
+            }
+
             $oldBalance = $wallet->balance;
             $wallet->balance = bcsub(strval($wallet->balance), strval($order->amount), 2);
             $wallet->save();
@@ -143,9 +154,9 @@ class PaymentService
             $order->pay_time = date('Y-m-d H:i:s');
             $order->save();
 
-            Db::commit();
-
             $this->processOrderPaid($order);
+
+            Db::commit();
 
             return [
                 'success' => true,
@@ -184,17 +195,6 @@ class PaymentService
             return false;
         }
 
-        $order = Order::where('order_no', $orderNo)->find();
-        if (!$order) {
-            Log::error('pay_notify_order_not_found', ['order_no' => $orderNo]);
-            return false;
-        }
-
-        if ($order->isPaid()) {
-            Log::info('pay_notify_order_already_paid', ['order_no' => $orderNo]);
-            return true;
-        }
-
         $isPaid = in_array($tradeStatus, ['TRADE_SUCCESS', 'success', 1]);
         if (!$isPaid) {
             Log::info('pay_notify_trade_not_success', ['order_no' => $orderNo, 'status' => $tradeStatus]);
@@ -203,20 +203,35 @@ class PaymentService
 
         Db::startTrans();
         try {
-            $order->pay_status = Order::STATUS_PAID;
-            $order->pay_time = date('Y-m-d H:i:s');
-            $order->pay_trade_no = $data['trade_no'] ?? '';
-            $order->save();
+            $affected = Order::where('order_no', $orderNo)
+                ->where('pay_status', Order::STATUS_PENDING)
+                ->update([
+                    'pay_status' => Order::STATUS_PAID,
+                    'pay_time' => date('Y-m-d H:i:s'),
+                    'pay_trade_no' => $data['trade_no'] ?? '',
+                ]);
+            if (!$affected) {
+                Db::rollback();
+                Log::info('pay_notify_already_processed', ['order_no' => $orderNo]);
+                return true;
+            }
 
-            $merchant = Merchant::where('id', $order->merchant_id)->find();
+            $order = Order::where('order_no', $orderNo)->lock(true)->find();
+            if (!$order) {
+                Db::rollback();
+                Log::error('pay_notify_order_not_found', ['order_no' => $orderNo]);
+                return false;
+            }
+
+            $merchant = Merchant::where('id', $order->merchant_id)->lock(true)->find();
             if ($merchant && $order->type == Order::TYPE_RECHARGE) {
                 $merchant->balance = bcadd(strval($merchant->balance), strval($order->amount), 2);
                 $merchant->save();
             }
 
-            Db::commit();
-
             $this->processOrderPaid($order);
+
+            Db::commit();
 
             return true;
         } catch (\Exception $e) {
@@ -304,8 +319,13 @@ class PaymentService
     protected function processShopOrder(Order $order): void
     {
         try {
+            $extra = json_decode($order->extra, true);
+            $quantity = isset($extra['quantity']) ? intval($extra['quantity']) : 1;
+            if ($quantity <= 0) {
+                $quantity = 1;
+            }
             $cardService = new CardDeliveryService();
-            $cardService->deliverCard($order->id);
+            $cardService->deliverCard($order->id, $quantity);
         } catch (\Exception $e) {
             Log::error('deliver_card_error', [
                 'order_id' => $order->id,
@@ -316,18 +336,10 @@ class PaymentService
 
     public function closeExpiredOrders(): int
     {
-        $expiredOrders = Order::where('pay_status', Order::STATUS_PENDING)
+        return Order::where('pay_status', Order::STATUS_PENDING)
             ->where('expire_time', '<', date('Y-m-d H:i:s'))
-            ->select();
-
-        $count = 0;
-        foreach ($expiredOrders as $order) {
-            $order->pay_status = Order::STATUS_CLOSED;
-            $order->save();
-            $count++;
-        }
-
-        return $count;
+            ->limit(500)
+            ->update(['pay_status' => Order::STATUS_CLOSED]);
     }
 
     public function refundOrder(int $orderId, string $reason = ''): array
