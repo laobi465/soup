@@ -1,6 +1,6 @@
 # 代码审查问题修复 - The Implementation Plan
 
-## [ ] Task 1: 安全密钥与默认值修复
+## [x] Task 1: 安全密钥与默认值修复
 - **Priority**: high
 - **Depends On**: None
 - **Description**:
@@ -18,7 +18,7 @@
   - `programmatic` TR-1.5: docker-compose 密码使用 ${VAR:?必须设置} 语法
 - **Notes**: 这是所有安全修复的基础，必须第一个完成
 
-## [ ] Task 2: 权限系统接线修复
+## [x] Task 2: 权限系统接线修复
 - **Priority**: high
 - **Depends On**: Task 1
 - **Description**:
@@ -37,7 +37,7 @@
   - `human-judgement` TR-2.5: 权限参数声明完整，每个路由都有对应权限名
 - **Notes**: 这是水平越权和垂直越权的核心修复
 
-## [ ] Task 3: 卡密安全与日志修复
+## [x] Task 3: 卡密安全与日志修复
 - **Priority**: high
 - **Depends On**: Task 1
 - **Description**:
@@ -60,7 +60,7 @@
   - `programmatic` TR-3.5: 限流计数在业务执行前
 - **Notes**: 涉及 Redis 操作，需确保 Redis 连接可用
 
-## [ ] Task 4: 发卡业务修复（含数据库迁移）
+## [x] Task 4: 发卡业务修复（含数据库迁移）
 - **Priority**: high
 - **Depends On**: Task 1
 - **Description**:
@@ -86,7 +86,7 @@
   - `programmatic` TR-4.6: 订单表有 buyer_ip 和 device_id 字段
 - **Notes**: 数据库迁移需保证可逆；历史卡密无明文，只能新卡密支持发卡
 
-## [ ] Task 5: 支付与资金并发修复
+## [x] Task 5: 支付与资金并发修复
 - **Priority**: high
 - **Depends On**: Task 1
 - **Description**:
@@ -108,7 +108,7 @@
   - `programmatic` TR-5.6: 订单号使用安全随机数
 - **Notes**: 所有资金操作必须在事务内，确保一致性
 
-## [ ] Task 6: 架构与部署修复
+## [x] Task 6: 架构与部署修复
 - **Priority**: high
 - **Depends On**: Task 1
 - **Description**:
@@ -135,7 +135,7 @@
   - `human-judgement` TR-6.6: 导入弹窗交互正常，可选择应用和卡类型
 - **Notes**: Nginx 配置修改需测试语法正确性
 
-## [ ] Task 7: 其他高优先级修复
+## [x] Task 7: 其他高优先级修复
 - **Priority**: medium
 - **Depends On**: Task 1
 - **Description**:
@@ -157,7 +157,7 @@
   - `programmatic` TR-7.6: CSV 导出有 BOM 头
 - **Notes**: 这些是重要但不阻断的问题
 
-## [ ] Task 8: 最终验证与推送
+## [x] Task 8: 最终验证与推送
 - **Priority**: high
 - **Depends On**: Task 2, Task 3, Task 4, Task 5, Task 6, Task 7
 - **Description**:
