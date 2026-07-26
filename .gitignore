@@ -44,3 +44,9 @@ coverage/
 *.tmp
 *.temp
 .cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
