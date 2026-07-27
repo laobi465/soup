@@ -551,11 +551,19 @@ install_php_deps() {
         return 0
     fi
 
+    # 用 --user root 执行 composer: 挂载目录属主为宿主机 root,
+    # 容器内 www 用户无权写 composer.lock/vendor, 必须用 root
+    # 同时设置 COMPOSER_ALLOW_SUPERUSER=1 避免 composer 警告
+    local composer_flags=""
     if $PROD_MODE; then
-        $compose_cmd exec -T php-fpm sh -c "cd /var/www/server && composer install --no-dev --optimize-autoloader"
-    else
-        $compose_cmd exec -T php-fpm sh -c "cd /var/www/server && composer install"
+        composer_flags="--no-dev --optimize-autoloader"
     fi
+    $compose_cmd exec -T --user root -e COMPOSER_ALLOW_SUPERUSER=1 php-fpm \
+        sh -c "cd /var/www/server && composer install $composer_flags"
+
+    # vendor 由 root 创建, 后续 php-fpm (www 用户) 需读权限, 确保可读
+    $compose_cmd exec -T --user root php-fpm \
+        sh -c "cd /var/www/server && chmod -R a+r vendor && find vendor -type d -exec chmod a+x {} +"
     log_info "PHP 依赖安装完成 ✓"
 }
 
@@ -563,6 +571,7 @@ fix_permissions() {
     log_step "修复目录权限"
     local compose_cmd
     compose_cmd="$(get_compose_cmd)"
+    # runtime/public/uploads 需要 www 用户可写, 用 root 创建并开放权限
     $compose_cmd exec -T --user root php-fpm sh -c "cd /var/www/server && mkdir -p runtime public/uploads && chmod -R 777 runtime public/uploads"
     log_info "权限修复完成 ✓"
 }
@@ -571,7 +580,8 @@ run_migrations() {
     log_step "执行数据库迁移"
     local compose_cmd
     compose_cmd="$(get_compose_cmd)"
-    $compose_cmd exec -T php-fpm sh -c "cd /var/www/server && php think migrate:run"
+    # 用 root 执行: think 命令可能写 vendor 缓存, 避免 www 用户权限问题
+    $compose_cmd exec -T --user root php-fpm sh -c "cd /var/www/server && php think migrate:run"
     log_info "数据库迁移完成 ✓"
 }
 
@@ -592,8 +602,8 @@ run_seeds() {
         return 0
     fi
 
-    # UserSeeder 非幂等, 用 try-catch 防止重复执行报错
-    $compose_cmd exec -T php-fpm sh -c "cd /var/www/server && php think seed:run" || {
+    # UserSeeder 非幂等, 用 try-catch 防止重复执行报错; 用 root 执行避免权限问题
+    $compose_cmd exec -T --user root php-fpm sh -c "cd /var/www/server && php think seed:run" || {
         log_warn "seed:run 报错 (可能已部分执行), 检查 admin 用户是否已存在"
         return 0
     }
