@@ -343,9 +343,7 @@ generate_server_env() {
     fi
 
     cat > "$env_file" <<EOF
-# 自动生成于 $(date '+%Y-%m-%d %H:%M:%S') by deploy.sh
-# 警告: 此文件包含敏感密钥, 请勿提交到版本控制 (已 .gitignore)
-
+; 自动生成 by deploy.sh - 请勿手动编辑, 含敏感密钥
 APP_DEBUG = ${app_debug}
 
 [APP]
