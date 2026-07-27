@@ -81,7 +81,8 @@ get_compose_cmd() {
     fi
     if [[ -f docker-compose.override.yml ]]; then
         files="$files -f docker-compose.override.yml"
-        log_info "已加载 docker-compose.override.yml"
+        # 输出到 stderr: 本函数返回值会被 $(...) 捕获, 日志不能污染 stdout
+        log_info "已加载 docker-compose.override.yml" >&2
     fi
     echo "$base $files"
 }
