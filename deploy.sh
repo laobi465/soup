@@ -737,14 +737,102 @@ run_seeds() {
     log_info "数据填充检查完成 ✓"
 }
 
+# ==================== 环境变量一致性校验 ====================
+# 校验并补全 .env 中核心服务必需的环境变量
+# 旧版升级用户的 .env 可能缺 REDIS_PASSWORD/MYSQL_ROOT_PASSWORD (新版强制要求),
+# 导致 compose 解析 ${VAR:?...} 时报 "required variable is missing a value"
+# 本函数检测缺失变量并自动补全, 同时同步更新 server/.env 对应字段
+ensure_core_env() {
+    if [[ ! -f .env ]]; then
+        die ".env 不存在, 请先执行: ./deploy.sh init"
+    fi
+
+    local need_patch=false
+    local mysql_pwd="" redis_pwd="" minio_user="" minio_pwd=""
+
+    # 检测缺失变量 (env_get 返回非 0 表示缺失)
+    if ! env_get MYSQL_ROOT_PASSWORD .env >/dev/null 2>&1; then
+        mysql_pwd=$(random_hex 16); need_patch=true
+    fi
+    if ! env_get REDIS_PASSWORD .env >/dev/null 2>&1; then
+        redis_pwd=$(random_hex 16); need_patch=true
+    fi
+    if ! env_get MINIO_ROOT_USER .env >/dev/null 2>&1; then
+        minio_user="minioadmin"; need_patch=true
+    fi
+    if ! env_get MINIO_ROOT_PASSWORD .env >/dev/null 2>&1; then
+        minio_pwd=$(random_hex 16); need_patch=true
+    fi
+
+    if ! $need_patch; then
+        return 0
+    fi
+
+    log_warn ".env 缺少核心服务必需变量, 自动补全 (原有变量保持不变)"
+    {
+        echo ""
+        echo "# === 以下变量由 deploy.sh ensure_core_env 自动补全 ($(date '+%Y-%m-%d %H:%M:%S')) ==="
+        [[ -n "$mysql_pwd" ]] && echo "MYSQL_ROOT_PASSWORD=${mysql_pwd}"
+        [[ -n "$redis_pwd" ]] && echo "REDIS_PASSWORD=${redis_pwd}"
+        [[ -n "$minio_user" ]] && echo "MINIO_ROOT_USER=${minio_user}"
+        [[ -n "$minio_pwd" ]] && echo "MINIO_ROOT_PASSWORD=${minio_pwd}"
+    } >> .env
+    log_info ".env 缺失变量已补全 (权限保持 600)"
+    chmod 600 .env
+
+    # 同步到 server/.env (PHP 客户端用), 仅在 server/.env 存在时更新对应字段
+    # server/.env 为 INI 格式, 用 awk 按段感知替换避免误改其他段同名字段
+    if [[ -f server/.env ]]; then
+        if [[ -n "$mysql_pwd" ]]; then
+            _update_server_env_field "DATABASE" "PASSWORD" "$mysql_pwd"
+        fi
+        if [[ -n "$redis_pwd" ]]; then
+            _update_server_env_field "REDIS" "PASSWORD" "$redis_pwd"
+        fi
+        if [[ -n "$minio_user" ]]; then
+            _update_server_env_field "MINIO" "ACCESS_KEY" "$minio_user"
+        fi
+        if [[ -n "$minio_pwd" ]]; then
+            _update_server_env_field "MINIO" "SECRET_KEY" "$minio_pwd"
+        fi
+        chmod 600 server/.env
+        log_info "server/.env 对应字段已同步"
+    else
+        log_warn "server/.env 不存在, 请执行: ./deploy.sh init 生成 PHP 端配置"
+    fi
+}
+
+# 段感知更新 server/.env 中 [SECTION] 段的 KEY = value
+# 用 awk 按段定位, 避免误改其他段同名字段 (如 DATABASE.PASSWORD 与 REDIS.PASSWORD)
+_update_server_env_field() {
+    local section="$1" key="$2" value="$3"
+    local tmp="${server_env_tmp:-/tmp/.server.env.$$}"
+    awk -v sec="$section" -v key="$key" -v val="$value" '
+        BEGIN { in_sec = 0 }
+        /^\[/ {
+            if (index($0, "[" sec "]") > 0) { in_sec = 1 } else { in_sec = 0 }
+            print; next
+        }
+        in_sec && $0 ~ "^" key "[[:space:]]*=" {
+            print key " = " val; next
+        }
+        { print }
+    ' server/.env > "$tmp" && mv "$tmp" server/.env
+}
+
 start_services() {
     log_step "启动核心服务 (排除 APK 注入相关服务)"
+
+    # 前置校验: 确保核心服务必需的环境变量已就绪
+    # (旧版升级用户的 .env 可能缺 REDIS_PASSWORD/MYSQL_ROOT_PASSWORD, 导致 compose 解析失败)
+    ensure_core_env
+
     local compose_cmd
     compose_cmd="$(get_compose_cmd)"
 
     # 通过显式指定服务列表排除 APK 注入相关服务 (默认不启动)
-    # docker compose up [SERVICE...] 仅启动指定服务及其依赖, 无需 --scale 0
-    # (新版 compose v2 中 --scale service=0 会将服务标记为 disabled 并报错)
+    # 注: APK 服务已加 profiles: [apk-inject], 未激活 profile 时 compose 不解析其环境变量
+    # 这里显式指定核心服务列表仅为清晰, profile 机制已确保 APK 服务不会被启动
     local services="nginx php-fpm mysql redis minio minio-init"
     if $PROD_MODE; then
         # 生产环境额外启动通用定时任务调度器 (非 APK 专用)
@@ -770,7 +858,8 @@ start_services() {
     if echo "$output" | grep -qE "already in use by container|network with name.*already exists"; then
         log_warn "检测到残留容器/网络冲突, 清理后重试"
         # 用 -f 强制移除残留容器 (停止+删除), 不删数据卷
-        $compose_cmd down --remove-orphans 2>/dev/null || true
+        # --profile apk-inject 确保 APK 服务残留也被清理
+        $compose_cmd --profile apk-inject down --remove-orphans 2>/dev/null || true
         # 兜底: 手动清理 compose 项目名下的容器 (compose down 偶尔遗漏)
         local orphan_containers
         orphan_containers=$(docker ps -a --filter "label=com.docker.compose.project=soup" --format '{{.Names}}' 2>/dev/null || echo "")
@@ -1030,10 +1119,10 @@ cmd_down() {
         if ! $ASSUME_YES; then
             die "删除数据卷是危险操作, 请加 --yes 确认: ./deploy.sh down --volumes --yes"
         fi
-        $compose_cmd down -v
+        $compose_cmd --profile apk-inject down -v
         log_info "服务已停止, 数据卷已删除"
     else
-        $compose_cmd down
+        $compose_cmd --profile apk-inject down
         log_info "服务已停止 (数据卷保留)"
     fi
 }
@@ -1042,7 +1131,8 @@ cmd_status() {
     log_step "服务状态"
     local compose_cmd
     compose_cmd="$(get_compose_cmd)"
-    $compose_cmd ps
+    # --profile apk-inject 让 APK 服务也出现在状态列表 (即使 profile 默认未激活)
+    $compose_cmd --profile apk-inject ps
 
     echo ""
     log_info "宿主机端口连通性 (若启用了端口冲突 override, mysql/redis 可能不监听宿主机):"
@@ -1110,10 +1200,10 @@ cmd_logs() {
 
     if [[ -n "$service" ]]; then
         log_info "查看 $service 日志 (tail=$tail_lines since=${since_time:-无} follow=${follow:-no})"
-        $compose_cmd logs "${opts[@]}" "$service"
+        $compose_cmd --profile apk-inject logs "${opts[@]}" "$service"
     else
         log_info "查看所有服务日志 (tail=$tail_lines since=${since_time:-无} follow=${follow:-no})"
-        $compose_cmd logs "${opts[@]}"
+        $compose_cmd --profile apk-inject logs "${opts[@]}"
     fi
 }
 
@@ -1168,7 +1258,7 @@ cmd_reset() {
     local compose_cmd
     compose_cmd="$(get_compose_cmd)"
     log_warn "正在删除所有数据卷..."
-    $compose_cmd down -v
+    $compose_cmd --profile apk-inject down -v
     # M8: 同步清理 uploads（reset 后旧文件可能与新数据冲突）
     rm -rf server/runtime/ server/public/uploads/
     log_info "重置完成, 请重新初始化: ./deploy.sh init && ./deploy.sh up"
@@ -1225,6 +1315,17 @@ cmd_enable_apk_inject() {
         die "配置文件缺失, 请先执行: ./deploy.sh init"
     fi
 
+    # 校验 APK 注入专用变量 (核心变量已由 ensure_core_env 在 up 时补全, 这里只查 APK 专用)
+    if ! env_get APK_KEYSTORE_PASSWORD .env >/dev/null 2>&1; then
+        log_error ".env 缺少 APK_KEYSTORE_PASSWORD"
+        die "请执行 ./deploy.sh init --force 重新生成, 或手动在 .env 添加: APK_KEYSTORE_PASSWORD=<强密码>"
+    fi
+    # keystore 文件必须就位
+    if [[ ! -f deploy/keystore/platform.keystore ]]; then
+        log_warn "deploy/keystore/platform.keystore 不存在, 尝试生成..."
+        generate_keystore || die "keystore 生成失败"
+    fi
+
     # 检查 Android 工具
     if ! check_android_tools; then
         die "Android 工具缺失, 无法启用 APK 注入功能"
@@ -1238,10 +1339,14 @@ cmd_enable_apk_inject() {
         fi
     fi
 
+    # 确保核心变量就绪 (REDIS_PASSWORD 等, APK 服务也依赖)
+    ensure_core_env
+
     local compose_cmd
     compose_cmd="$(get_compose_cmd)"
-    log_info "启动 APK 注入相关服务..."
-    $compose_cmd up -d apk-inject-service apk-queue-worker apk-scheduler
+    log_info "启动 APK 注入相关服务 (激活 profile: apk-inject)..."
+    # --profile apk-inject 激活 APK 服务的 profiles, 使其被解析与启动
+    $compose_cmd --profile apk-inject up -d apk-inject-service apk-queue-worker apk-scheduler
 
     # 健康检查
     # M11: 端口不硬编码, 从环境变量读取（与 compose 中 127.0.0.1:8081:8080 一致）

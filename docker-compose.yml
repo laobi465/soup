@@ -157,8 +157,10 @@ services:
     restart: "no"
     logging: *default-logging
 
-  # APK注入微服务
+  # APK注入微服务 (默认不启动, 用 enable-apk-inject 命令或 --profile apk-inject 启用)
+  # profiles 确保未启用时 compose 不解析本服务环境变量, 避免 APK 专用变量缺失阻断核心服务启动
   apk-inject-service:
+    profiles: [apk-inject]
     build:
       context: ./apk-inject-service
       dockerfile: Dockerfile
@@ -199,8 +201,9 @@ services:
       - /tmp:noexec,nosuid,nodev,size=1g
     logging: *default-logging
 
-  # APK注入队列Worker
+  # APK注入队列Worker (profile: apk-inject)
   apk-queue-worker:
+    profiles: [apk-inject]
     build: ./docker/php
     container_name: card-auth-apk-queue-worker
     working_dir: /var/www/server
@@ -221,9 +224,10 @@ services:
     pids_limit: 128
     logging: *default-logging
 
-  # APK注入任务回收调度器（Task 4 / C6, C7）
+  # APK注入任务回收调度器 (profile: apk-inject)
   # 每 5 分钟扫描卡死的 PROCESSING 任务和超时未提交的 PENDING 任务
   apk-scheduler:
+    profiles: [apk-inject]
     build: ./docker/php
     container_name: card-auth-apk-scheduler
     working_dir: /var/www/server
