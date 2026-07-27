@@ -127,58 +127,117 @@
 │   └── backup.sh              # 数据库备份脚本
 ├── docker-compose.yml         # 开发环境
 ├── docker-compose.prod.yml    # 生产环境
+├── deploy.sh                  # 一键部署脚本（推荐）
+├── quick-start.sh             # 远程一键部署脚本（curl|bash）
 └── README.md
 ```
 
 ## 快速开始
 
-### 环境要求
-- Docker 20.10+ & Docker Compose v2+
-- Node.js 18+（前端开发）
-- Composer 2.x（PHP 依赖）
+### 一键部署（推荐）
 
-### 1. 启动后端服务
+#### 场景 A：远程一键（新服务器，最快）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/laobi465/soup/main/quick-start.sh | bash
+```
+
+> 自动安装 Docker、克隆仓库到 `/opt/soup`、生成配置、启动核心平台，打印访问地址与默认账号。
+> 生产环境追加 `--prod`：`curl -fsSL ... | bash -s -- --prod`
+
+#### 场景 B：已克隆仓库
+
+```bash
+# 开发环境（端口 8000/8080，APP_DEBUG=true）
+./deploy.sh
+
+# 生产环境（端口 80/443，APP_DEBUG=false，含 SSL 自签证书）
+./deploy.sh --prod
+
+# 启用 APK 云端注入功能（按需，需 Android Build Tools）
+./deploy.sh enable-apk-inject
+```
+
+#### 场景 C：子命令模式（精细控制）
+
+```bash
+./deploy.sh doctor              # 环境诊断（Docker/端口/磁盘/gVisor）
+./deploy.sh init [--prod]       # 仅初始化配置（.env/keystore/前端构建/SSL）
+./deploy.sh up [--prod]         # 仅启动服务（含就绪等待+迁移+填充+健康检查）
+./deploy.sh down [--prod]       # 停止服务
+./deploy.sh status              # 查看服务状态与端口连通性
+./deploy.sh logs [service]      # 查看日志（Ctrl+C 退出）
+./deploy.sh backup              # 数据库备份（输出 /data/backups/mysql/）
+./deploy.sh reset --yes         # 危险：清空数据卷并重新初始化
+./deploy.sh install-gvisor      # 辅助安装 gVisor（Debian/Ubuntu，APK 注入生产环境必需）
+./deploy.sh enable-apk-inject   # 启用 APK 云端注入功能
+```
+
+#### 一键部署自动完成的工作
+
+1. 自动生成所有敏感密钥（MySQL/MinIO/keystore/JWT，随机 32+ 字符），根目录 `.env` 与 `server/.env` 密码跨文件一致
+2. 自动生成 APK 签名 keystore（本机无 keytool 时用 Docker 容器）
+3. 自动构建前端 `admin/dist`（本机无 npm 时用 `node:20-alpine` 容器）
+4. 自动等待 MySQL 就绪后执行迁移与数据填充
+5. 生产模式自动生成自签 SSL 证书（CN 取 hostname 或 `--domain=`）
+6. APK 云端注入作为可选功能，`enable-apk-inject` 按需启用
+
+#### 默认账号
+
+| 角色 | 账号 | 密码 |
+|------|------|------|
+| 超级管理员 | admin | admin123456 |
+
+> **安全提示**：部署成功后请立即登录修改默认密码。
+
+### 环境要求
+
+- Docker 20.10+ & Docker Compose v2+（一键脚本会自动安装）
+- 磁盘空间 ≥ 5GB
+- 生产环境推荐 Debian 12 / Ubuntu 22.04+
+
+### 手动部署（备选）
+
+如需手动部署（不使用一键脚本），可按以下步骤操作：
 
 ```bash
 cd /workspace
 
-# 启动所有服务
+# 1. 配置环境变量（参考 .env.example 与 server/.example.env）
+cp .env.example .env
+cp server/.example.env server/.env
+# 编辑两个文件，确保 MYSQL_ROOT_PASSWORD / MINIO_ROOT_PASSWORD / APK_KEYSTORE_PASSWORD 跨文件一致
+
+# 2. 生成 keystore
+keytool -genkeypair -keystore deploy/keystore/platform.keystore -alias platform \
+    -keyalg RSA -keysize 2048 -validity 3650
+
+# 3. 构建前端
+cd admin && npm ci && npm run build && cd ..
+
+# 4. 启动服务
 docker compose up -d
 
-# 安装 PHP 依赖（首次）
+# 5. 等待 MySQL 就绪后安装依赖与初始化
 docker compose exec php-fpm composer install
-
-# 执行数据库迁移
 docker compose exec php-fpm php think migrate:run
-
-# 执行数据填充
 docker compose exec php-fpm php think seed:run
 ```
 
 服务地址：
 - 后端 API：http://localhost:8000
-- MySQL：localhost:3306（root / root123456）
+- 管理后台：http://localhost:8080
+- MySQL：localhost:3306
 - Redis：localhost:6379
+- MinIO 控制台：http://localhost:9001
 
-### 2. 启动前端
+### 前端开发模式
 
 ```bash
 cd /workspace/admin
-
-# 安装依赖
 npm install
-
-# 开发模式
-npm run dev
+npm run dev    # 开发服务器 http://localhost:5173
 ```
-
-前端地址：http://localhost:5173
-
-### 3. 默认账号
-
-| 角色 | 账号 | 密码 |
-|------|------|------|
-| 超级管理员 | admin | admin123456 |
 
 ## 验证 API 快速接入
 
@@ -256,30 +315,53 @@ print(result)
 
 ## 生产部署
 
-### Docker Compose 生产部署
+### 一键生产部署（推荐）
+
+```bash
+# 方式 1：远程一键（新服务器）
+curl -fsSL https://raw.githubusercontent.com/laobi465/soup/main/quick-start.sh | bash -s -- --prod
+
+# 方式 2：已克隆仓库
+./deploy.sh --prod
+
+# 如需启用 APK 云端注入（生产环境需先安装 gVisor）
+./deploy.sh install-gvisor       # 安装 gVisor 沙箱（Debian/Ubuntu）
+./deploy.sh enable-apk-inject    # 启用 APK 注入服务
+
+# 如需指定 SSL 证书 CN（域名）
+./deploy.sh --prod --domain=example.com
+```
+
+生产配置包含：
+- Nginx：HTTPS（自签证书或替换为正式证书）、Gzip 压缩、静态资源缓存、HTTP/2
+- PHP-FPM：OPcache 优化、生产级配置
+- MySQL：InnoDB 优化、慢查询日志、二进制日志
+- Redis：持久化配置
+- 队列 Worker 容器
+- 定时任务容器
+- APK 注入容器：gVisor 沙箱 + seccomp 兜底 + 只读根文件系统
+
+> 自签证书仅限测试，生产请替换 `docker/nginx/ssl/server.{crt,key}` 为正式证书（Let's Encrypt / 商业 CA）。
+
+### 手动生产部署（备选）
 
 ```bash
 # 使用生产配置启动
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-生产配置包含：
-- Nginx：HTTPS、Gzip 压缩、静态资源缓存、HTTP/2
-- PHP-FPM：OPcache 优化、生产级配置
-- MySQL：InnoDB 优化、慢查询日志、二进制日志
-- Redis：持久化配置
-- 队列 Worker 容器
-- 定时任务容器
-
 ### 数据库备份
 
 ```bash
-# 手动备份
+# 方式 1：使用一键脚本（推荐，自动从 .env 读取密码）
+./deploy.sh backup
+
+# 方式 2：手动备份
 bash scripts/backup.sh
 
 # 添加定时任务（每日凌晨 3 点）
 crontab -e
-0 3 * * * /workspace/scripts/backup.sh
+0 3 * * * /workspace/deploy.sh backup
 ```
 
 ### 宝塔面板部署
