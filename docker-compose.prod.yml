@@ -93,12 +93,108 @@ services:
     restart: always
     command: redis-server /usr/local/etc/redis/redis.conf
 
+  minio:
+    image: minio/minio:latest
+    container_name: card-auth-minio
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - card-auth-network
+    restart: unless-stopped
+
+  # MinIO 初始化（一次性运行）
+  minio-init:
+    image: minio/mc:latest
+    container_name: card-auth-minio-init
+    depends_on:
+      - minio
+    environment:
+      MINIO_HOST: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      MINIO_BUCKET: ${MINIO_BUCKET:-card-auth}
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin123};
+      mc mb local/card-auth --ignore-existing;
+      mc mb local/apk-source --ignore-existing;
+      mc mb local/apk-output --ignore-existing;
+      mc mb local/apk-temp --ignore-existing;
+      mc ilm add --expire-hours 1 local/apk-temp 2>/dev/null || true;
+      mc ilm add --expire-days 7 local/apk-output 2>/dev/null || true;
+      mc ilm add --expire-days 7 local/apk-source 2>/dev/null || true;
+      echo 'MinIO initialized';
+      "
+    networks:
+      - card-auth-network
+    restart: "no"
+
+  # APK注入微服务
+  apk-inject-service:
+    build:
+      context: ./apk-inject-service
+      dockerfile: Dockerfile
+    container_name: card-auth-apk-inject
+    ports:
+      - "127.0.0.1:8081:8080"
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      MINIO_BUCKET: ${MINIO_BUCKET:-card-auth}
+      APK_KEYSTORE_PASSWORD: ${APK_KEYSTORE_PASSWORD:-changeit}
+    volumes:
+      - apk-tmp:/tmp
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 64
+    depends_on:
+      - minio
+    networks:
+      - card-auth-network
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=1g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # gVisor 沙箱（需要宿主机安装 runsc）
+    # runtime: runsc
+
+  # APK注入队列Worker
+  apk-queue-worker:
+    build: ./docker/php
+    container_name: card-auth-apk-queue-worker
+    working_dir: /var/www/server
+    command: ["php", "think", "queue:work", "--queue=apk-inject", "--tries=3", "--sleep=3", "--timeout=180"]
+    volumes:
+      - ./server:/var/www/server
+    depends_on:
+      - mysql
+      - redis
+    user: www
+    networks:
+      - card-auth-network
+    restart: unless-stopped
+
 volumes:
   mysql-data:
   redis-data:
   nginx-logs:
   php-logs:
   mysql-logs:
+  minio-data:
+  apk-tmp:
 
 networks:
   card-auth-network:

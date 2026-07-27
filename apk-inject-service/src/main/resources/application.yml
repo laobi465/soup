@@ -1,0 +1,41 @@
+server:
+  port: 8080
+  # 单次注入可能耗时较长（下载/解包/签名），放宽超时
+  tomcat:
+    connection-timeout: 300000
+    threads:
+      max: 50
+
+spring:
+  application:
+    name: apk-inject-service
+  servlet:
+    multipart:
+      max-file-size: 200MB
+      max-request-size: 200MB
+  jackson:
+    default-property-inclusion: non_null
+
+# MinIO（S3 兼容）配置
+minio:
+  endpoint: ${MINIO_ENDPOINT:http://minio:9000}
+  access-key: ${MINIO_ACCESS_KEY:minioadmin}
+  secret-key: ${MINIO_SECRET_KEY:minioadmin123}
+  bucket: ${MINIO_BUCKET:card-auth}
+
+# APK 注入流水线配置
+apk:
+  keystore-path: ${APK_KEYSTORE_PATH:/app/resources/keystore/platform.keystore}
+  keystore-password: ${APK_KEYSTORE_PASSWORD:changeit}
+  keystore-alias: ${APK_KEYSTORE_ALIAS:platform}
+  sdk-dex-path: ${APK_SDK_DEX_PATH:/app/resources/dex/kami-sdk.dex}
+  # 外部工具路径（缺省走 PATH）
+  apkeditor-path: ${APKEDITOR_PATH:/app/tools/APKEditor.jar}
+  zipalign-path: ${ZIPALIGN_PATH:zipalign}
+  apksigner-path: ${APKSIGNER_PATH:apksigner}
+  aapt2-path: ${AAPT2_PATH:aapt2}
+
+logging:
+  level:
+    com.cardauth.inject: INFO
+    root: INFO

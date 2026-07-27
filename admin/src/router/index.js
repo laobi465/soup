@@ -71,6 +71,18 @@ const constantRoutes = [
         name: 'Dashboard',
         component: () => import('@/views/dashboard/index.vue'),
         meta: { title: '控制台', icon: 'Odometer' }
+      },
+      {
+        path: 'apk-inject',
+        name: 'ApkInject',
+        component: () => import('@/views/merchant/apk-inject/index.vue'),
+        meta: { title: 'APK注入', requiresAuth: true }
+      },
+      {
+        path: 'apk-inject/create',
+        name: 'ApkInjectCreate',
+        component: () => import('@/views/merchant/apk-inject/create.vue'),
+        meta: { title: '创建注入任务', requiresAuth: true, hidden: true }
       }
     ]
   },

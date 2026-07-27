@@ -200,6 +200,15 @@ Route::group('api/merchant', function () {
         Route::put(':id', 'merchant.SubRoleController/update');
         Route::delete(':id', 'merchant.SubRoleController/delete');
     });
+
+    // APK注入
+    Route::group('apk-inject', function () {
+        Route::post('create', 'merchant.ApkInjectController/create');
+        Route::post('dispatch', 'merchant.ApkInjectController/dispatch');
+        Route::get('list', 'merchant.ApkInjectController/list');
+        Route::get('detail/:id', 'merchant.ApkInjectController/detail');
+        Route::get('download/:id', 'merchant.ApkInjectController/download');
+    });
 })->middleware([
     \app\middleware\AuthMiddleware::class,
     \app\middleware\MerchantStatusMiddleware::class,

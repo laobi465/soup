@@ -1,0 +1,11 @@
+此文件为占位文件，由 Task 6 编译生成真实 dex 后替换。
+
+kami-sdk.dex 是注入到目标 APK 中的卡密校验 SDK 载荷，需满足：
+- 包含类 com.cardauth.sdk.KamiProxyApplication（继承 android.app.Application）
+- attachBaseContext 中调用 MultiDex.install 并启动卡密校验
+- onCreate 中反射还原原 Application（ActivityThread.mInitialApplication 等）
+- 从 AndroidManifest 的 meta-data 读取：kami_original_application / kami_app_key / kami_app_secret / kami_base_url
+- 体积 ≤ 500KB，d8 编译，不含 AndroidX
+
+DexMerger 会对本文件做 dex 魔数（"dex\n"）校验；当前为文本占位，注入流程会在 dex 合并步骤以
+"kami-sdk.dex 魔数校验失败" 明确报错，提示先用 Task 6 生成。

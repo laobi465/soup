@@ -19,4 +19,14 @@ abstract class StorageDriver
     abstract public function getUrl(string $path): string;
 
     abstract public function getFileInfo(string $path): array;
+
+    public function presignedUploadUrl(string $path, int $expires = 300): string
+    {
+        throw new \RuntimeException('当前存储驱动不支持 presigned URL');
+    }
+
+    public function presignedDownloadUrl(string $path, int $expires = 3600): string
+    {
+        throw new \RuntimeException('当前存储驱动不支持 presigned URL');
+    }
 }

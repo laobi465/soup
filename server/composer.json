@@ -25,7 +25,10 @@
         "topthink/think-orm": "^3.0|^4.0",
         "topthink/think-filesystem": "^2.0|^3.0",
         "firebase/php-jwt": "^7.1",
-        "phpoffice/phpspreadsheet": "^5.9"
+        "phpoffice/phpspreadsheet": "^5.9",
+        "topthink/think-queue": "^3.0",
+        "guzzlehttp/guzzle": "^7.8",
+        "aws/aws-sdk-php": "^3.300"
     },
     "require-dev": {
         "topthink/think-dumper": "^1.0",

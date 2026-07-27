@@ -142,7 +142,32 @@ class StorageService
 
     public static function getAllowedFileExtensions(): array
     {
-        $exts = SystemConfigService::get('upload_file_exts', 'zip,rar,7z,pdf,doc,docx,xls,xlsx,ppt,pptx,txt,csv');
+        $exts = SystemConfigService::get('upload_file_exts', 'zip,rar,7z,pdf,doc,docx,xls,xlsx,ppt,pptx,txt,csv,apk');
         return array_map('strtolower', explode(',', $exts));
+    }
+
+    /**
+     * 获取APK存储驱动（MinIO）
+     */
+    public static function getApkStorageDriver(): MinioStorage
+    {
+        $config = config('filesystem.disks.minio', []);
+        return new MinioStorage($config);
+    }
+
+    /**
+     * 生成APK上传的presigned URL
+     */
+    public static function getApkPresignedUploadUrl(string $path, int $expires = 300): string
+    {
+        return self::getApkStorageDriver()->presignedUploadUrl($path, $expires);
+    }
+
+    /**
+     * 生成APK下载的presigned URL
+     */
+    public static function getApkPresignedDownloadUrl(string $path, int $expires = 3600): string
+    {
+        return self::getApkStorageDriver()->presignedDownloadUrl($path, $expires);
     }
 }

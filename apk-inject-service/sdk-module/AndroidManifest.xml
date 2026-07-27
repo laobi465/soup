@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application>
+        <!-- 卡密验证 UI（由 KamiProxyApplication 在校验失败时拉起） -->
+        <activity
+            android:name="com.cardauth.sdk.ui.CardVerifyActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault.Light" />
+    </application>
+</manifest>

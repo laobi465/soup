@@ -19,6 +19,15 @@ return [
             // 可见性
             'visibility' => 'public',
         ],
+        'minio' => [
+            'type'       => 'minio',
+            'endpoint'    => env('minio.endpoint', 'http://minio:9000'),
+            'bucket'      => env('minio.bucket', 'card-auth'),
+            'access_key'  => env('minio.access_key', 'minioadmin'),
+            'secret_key'  => env('minio.secret_key', 'minioadmin123'),
+            'use_ssl'     => false,
+            'region'      => 'us-east-1',
+        ],
         // 更多的磁盘配置信息
     ],
 ];

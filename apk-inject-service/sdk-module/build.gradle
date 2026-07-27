@@ -1,0 +1,30 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    compileSdk 34
+    namespace 'com.cardauth.sdk'
+
+    defaultConfig {
+        minSdk 21
+        targetSdk 34
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // 仅编译 SDK 自身类，不打包任何外部依赖
+    // 故意不引入 AndroidX（含 MultiDex），MultiDex 通过 KamiProxyApplication 反射调用，
+    // 保证注入后的 kami-sdk.dex 零外部依赖、与宿主 APK 无版本冲突。
+}
+
+dependencies {
+    // 不引入任何外部依赖：
+    // - JSON 解析使用 Android 自带的 org.json
+    // - HTTP 使用 java.net.HttpURLConnection
+    // - 签名使用 javax.crypto
+    // 如果确实需要 Gson，可用 implementation 'com.google.code.gson:gson:2.10.1'
+}
