@@ -756,6 +756,28 @@ start_services() {
         return 0
     fi
 
+    # 失败: 检测是否为容器名/网络冲突 (前次失败遗留)
+    # "already in use by container" / "network with name ... already exists"
+    if echo "$output" | grep -qE "already in use by container|network with name.*already exists"; then
+        log_warn "检测到残留容器/网络冲突, 清理后重试"
+        # 用 -f 强制移除残留容器 (停止+删除), 不删数据卷
+        $compose_cmd down --remove-orphans 2>/dev/null || true
+        # 兜底: 手动清理 compose 项目名下的容器 (compose down 偶尔遗漏)
+        local orphan_containers
+        orphan_containers=$(docker ps -a --filter "label=com.docker.compose.project=soup" --format '{{.Names}}' 2>/dev/null || echo "")
+        if [[ -n "$orphan_containers" ]]; then
+            echo "$orphan_containers" | xargs -r docker rm -f 2>/dev/null || true
+        fi
+        # 清理残留网络
+        docker network rm soup_card-auth-network 2>/dev/null || true
+
+        # 重新尝试启动
+        if output=$($compose_cmd up -d --force-recreate $services 2>&1); then
+            log_info "核心服务已启动 ✓ (清理残留后重试成功)"
+            return 0
+        fi
+    fi
+
     # 失败: 检测是否为端口冲突 (address already in use / bind host port)
     if ! echo "$output" | grep -qE "address already in use|bind host port|failed to bind"; then
         # 非端口冲突错误, 直接输出并失败
