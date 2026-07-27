@@ -30,6 +30,17 @@ public class ApkParser {
     private static final Pattern TARGET_SDK_PATTERN =
             Pattern.compile("targetSdkVersion:'(\\d+)'");
 
+    /**
+     * 注入所需最低 minSdkVersion（Android 5.0 / API 21）。
+     *
+     * <p>原因（I7 修复）：SDK dex 通过 {@link DexMerger} 以 {@code classes(N+1).dex}
+     * 追加进宿主 APK，{@code KamiProxyApplication} 必然位于 secondary dex。
+     * API 21+ 的 ART 原生支持 multidex（安装时合并所有 classes*.dex），可正常加载；
+     * 而 API &lt; 21 的 Dalvik 仅在启动时加载 classes.dex，会抛
+     * {@code ClassNotFoundException} 导致宿主崩溃。因此注入前必须拒绝低版本 APK。
+     */
+    static final int MIN_REQUIRED_SDK = 21;
+
     @Value("${apk.aapt2-path:aapt2}")
     private String aapt2Path;
 
@@ -67,7 +78,21 @@ public class ApkParser {
             info.setTargetSdkVersion(parseIntSafe(m.group(1)));
         }
 
-        log.info("APK解析完成: {}", info.getPackageName());
+        // I7 修复：拒绝 minSdk < 21 的 APK 注入
+        // KamiProxyApplication 位于 secondary dex，仅 API 21+ 的 ART 原生 multidex 可加载
+        int minSdk = info.getMinSdkVersion();
+        if (minSdk <= 0) {
+            throw new RuntimeException("无法解析 minSdkVersion，拒绝注入（避免 dex 加载失败）");
+        }
+        if (minSdk < MIN_REQUIRED_SDK) {
+            throw new RuntimeException("APK minSdkVersion=" + minSdk
+                    + " 低于注入最低要求 " + MIN_REQUIRED_SDK
+                    + "（KamiProxyApplication 位于 secondary dex，"
+                    + "API < 21 的 Dalvik 不支持原生 multidex，启动会崩溃）");
+        }
+
+        log.info("APK解析完成: {} (minSdk={}, targetSdk={})",
+                info.getPackageName(), info.getMinSdkVersion(), info.getTargetSdkVersion());
         return info;
     }
 

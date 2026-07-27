@@ -31,8 +31,7 @@ WORKDIR /app
 # 拷贝构建产物
 COPY --from=builder /build/target/apk-inject-service.jar app.jar
 
-# 拷贝资源（keystore 占位 + dex 占位）；生产环境应通过 volume 挂载真实平台签名
-COPY src/main/resources/keystore /app/resources/keystore
+# 拷贝 dex 资源（keystore 不进镜像，通过 volume 挂载到 /opt/keystore）
 COPY src/main/resources/dex /app/resources/dex
 
 # 工具目录：APKEditor.jar 及 Android build-tools 二进制应放置于此（或挂载）

@@ -52,6 +52,9 @@ public class ApkInjectService {
     private ShellDetector shellDetector;
 
     @Autowired
+    private ZipBombChecker zipBombChecker;
+
+    @Autowired
     private DexMerger dexMerger;
 
     @Autowired
@@ -92,6 +95,10 @@ public class ApkInjectService {
             Path sourceApk = tempDir.resolve("source.apk");
             downloadFromMinio(request.getSourcePath(), sourceApk);
             steps.add("下载源APK: " + request.getSourcePath());
+
+            // 2.5 APK 安全校验：ZIP 魔数 + ZIP 炸弹检测（在解析前拦截恶意文件）
+            zipBombChecker.check(sourceApk);
+            steps.add("APK安全校验: 魔数+ZIP炸弹检测通过");
 
             // 3. 解析 APK
             ApkInfo apkInfo = apkParser.parse(sourceApk);

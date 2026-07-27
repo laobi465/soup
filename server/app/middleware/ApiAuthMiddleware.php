@@ -5,6 +5,7 @@ namespace app\middleware;
 
 use app\library\AesEncrypt;
 use app\model\App;
+use app\service\JwtService;
 use think\facade\Cache;
 use think\Request;
 use think\Response;
@@ -15,6 +16,58 @@ class ApiAuthMiddleware
     const TIMESTAMP_TOLERANCE = 300;
 
     public function handle(Request $request, \Closure $next): Response
+    {
+        // Task 3：优先尝试 JWT Bearer 鉴权（注入 SDK 模式）
+        // 若 Authorization 头存在且为 Bearer token，走 JWT 校验路径；
+        // 否则回退到原有 HMAC 五重鉴权（开发者集成模式）
+        $authHeader = $request->header('Authorization', '');
+        if (str_starts_with($authHeader, 'Bearer ')) {
+            return $this->authByJwt($request, $next, substr($authHeader, 7));
+        }
+
+        return $this->authByHmac($request, $next);
+    }
+
+    /**
+     * JWT Bearer 鉴权（注入 SDK 模式，Task 3）
+     * SDK 用 task_token 换取 JWT 后，通过 Authorization: Bearer <token> 调用卡密验证接口。
+     */
+    protected function authByJwt(Request $request, \Closure $next, string $token): Response
+    {
+        $token = trim($token);
+        if ($token === '') {
+            return $this->errorResponse(4001, 'JWT不能为空');
+        }
+
+        $jwtService = new JwtService();
+        $payload = $jwtService->verifySdkSession($token);
+        if (!$payload) {
+            return $this->errorResponse(401, 'JWT无效或已过期');
+        }
+
+        $appId = (int)($payload['app_id'] ?? 0);
+        $app = App::find($appId);
+        if (!$app) {
+            return $this->errorResponse(4001, '应用不存在');
+        }
+        if ($app->status != 1) {
+            return $this->errorResponse(4107, '应用已停用');
+        }
+
+        // 注入 SDK 模式：JWT 已含 task_id/app_id/merchant_id/app_key 上下文
+        // app_secret 不注入 request（SDK 模式无需签名，Bearer 即凭证）
+        $request->app = $app;
+        $request->app_id = $app->id;
+        $request->merchant_id = $app->merchant_id;
+        $request->sdk_jwt_payload = $payload;
+
+        return $next($request);
+    }
+
+    /**
+     * HMAC 五重鉴权（开发者集成模式，原有逻辑）
+     */
+    protected function authByHmac(Request $request, \Closure $next): Response
     {
         $appKey = $request->header('X-AppKey', '');
         $timestamp = $request->header('X-Timestamp', '');

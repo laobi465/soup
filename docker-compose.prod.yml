@@ -125,12 +125,13 @@ services:
       sleep 5;
       mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin123};
       mc mb local/card-auth --ignore-existing;
-      mc mb local/apk-source --ignore-existing;
-      mc mb local/apk-output --ignore-existing;
-      mc mb local/apk-temp --ignore-existing;
-      mc ilm add --expire-hours 1 local/apk-temp 2>/dev/null || true;
-      mc ilm add --expire-days 7 local/apk-output 2>/dev/null || true;
-      mc ilm add --expire-days 7 local/apk-source 2>/dev/null || true;
+      # lifecycle 规则按前缀配置到 card-auth bucket（实际写入路径）
+      # apk-source/ 和 apk-output/ 7 天过期，apk-temp/ 1 小时过期
+      mc ilm rule add local/card-auth --prefix 'apk-source/' --expire-days 7 2>/dev/null || true;
+      mc ilm rule add local/card-auth --prefix 'apk-output/' --expire-days 7 2>/dev/null || true;
+      mc ilm rule add local/card-auth --prefix 'apk-temp/' --expire-hours 1 2>/dev/null || true;
+      echo '=== MinIO lifecycle rules ===';
+      mc ilm rule ls local/card-auth;
       echo 'MinIO initialized';
       "
     networks:
@@ -150,9 +151,13 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
       MINIO_BUCKET: ${MINIO_BUCKET:-card-auth}
-      APK_KEYSTORE_PASSWORD: ${APK_KEYSTORE_PASSWORD:-changeit}
+      # 强制要求环境变量，缺失时容器启动报错（不使用默认密码 changeit）
+      APK_KEYSTORE_PASSWORD: ${APK_KEYSTORE_PASSWORD:?APK_KEYSTORE_PASSWORD is required}
+      APK_KEYSTORE_ALIAS: ${APK_KEYSTORE_ALIAS:-platform}
     volumes:
       - apk-tmp:/tmp
+      # keystore 通过只读挂载注入，不入库不进镜像
+      - ./deploy/keystore:/opt/keystore:ro
     mem_limit: 2g
     cpus: 2
     pids_limit: 64
@@ -166,17 +171,19 @@ services:
       - /tmp:noexec,nosuid,nodev,size=1g
     security_opt:
       - no-new-privileges:true
+      # seccomp profile 作为 gVisor 不可用时的兜底加固
+      - seccomp:./deploy/seccomp-apk-inject.json
     cap_drop:
       - ALL
-    # gVisor 沙箱（需要宿主机安装 runsc）
-    # runtime: runsc
+    # gVisor 沙箱（需要宿主机安装 runsc，见 docs/gvisor-setup.md）
+    runtime: runsc
 
   # APK注入队列Worker
   apk-queue-worker:
     build: ./docker/php
     container_name: card-auth-apk-queue-worker
     working_dir: /var/www/server
-    command: ["php", "think", "queue:work", "--queue=apk-inject", "--tries=3", "--sleep=3", "--timeout=180"]
+    command: ["php", "think", "queue:work", "--queue=apk-inject", "--tries=1", "--sleep=3", "--timeout=180"]
     volumes:
       - ./server:/var/www/server
     depends_on:
@@ -186,6 +193,25 @@ services:
     networks:
       - card-auth-network
     restart: unless-stopped
+
+  # APK注入任务回收调度器（Task 4 / C6, C7）
+  # 每 5 分钟扫描卡死的 PROCESSING 任务和超时未提交的 PENDING 任务
+  apk-scheduler:
+    build: ./docker/php
+    container_name: card-auth-apk-scheduler
+    working_dir: /var/www/server
+    command: sh -c "mkdir -p /var/log/php && while true; do php think apk-inject:recover >> /var/log/php/apk-scheduler.log 2>&1; sleep 300; done"
+    volumes:
+      - ./server:/var/www/server
+      - ./docker/php/php-prod.ini:/usr/local/etc/php/php.ini
+      - php-logs:/var/log/php
+    depends_on:
+      - mysql
+      - redis
+    user: www
+    networks:
+      - card-auth-network
+    restart: always
 
 volumes:
   mysql-data:

@@ -80,6 +80,7 @@ class ApkInjectJob
 
     /**
      * 调用 Java 注入微服务
+     * app_secret 不从任务表读取（不落库），而是从 App 模型实时解密取用
      */
     private function callInjectService(ApkInjectTask $task): array
     {
@@ -88,12 +89,23 @@ class ApkInjectJob
             $sdkConfig = json_decode((string)$task->sdk_config, true) ?: [];
         }
 
+        // 从 App 模型实时解密 app_secret（不落库，用后即焚）
+        $app = \app\model\App::find($task->app_id);
+        $plainSecret = '';
+        if ($app && !empty($app->app_secret_encrypted)) {
+            $decrypted = \app\library\AesEncrypt::decrypt($app->app_secret_encrypted);
+            if ($decrypted !== false) {
+                $plainSecret = $decrypted;
+            }
+        }
+
         $payload = [
             'task_id' => $task->id,
             'source_path' => $task->source_path,
             'app_key' => $sdkConfig['app_key'] ?? '',
-            'app_secret' => $sdkConfig['app_secret'] ?? '',
+            'app_secret' => $plainSecret, // 实时解密，不落库
             'base_url' => $sdkConfig['base_url'] ?? '',
+            'task_token' => $task->task_token ?? '', // 用于 manifest 注入
         ];
 
         $injectServiceUrl = env('apk_inject.service_url', 'http://apk-inject-service:8080');
@@ -117,7 +129,9 @@ class ApkInjectJob
     }
 
     /**
-     * 任务失败回调
+     * 任务失败回调（仅记录日志，不重复 decrement）
+     * decrement 在 fire() 的 finally 块中已完成（终态确认点）
+     * failed() 仅在 think-queue 重试耗尽时调用，当前配置 --tries=1（失败即终态）
      */
     public function failed($data): void
     {
@@ -129,7 +143,7 @@ class ApkInjectJob
                 'error_log' => '队列任务执行失败（超时或异常）',
                 'completed_at' => date('Y-m-d H:i:s'),
             ]);
-            ApkInjectService::decrementConcurrent($task->merchant_id);
+            // 注意：decrementConcurrent 已在 fire() 的 finally 中调用，此处不重复
         }
 
         Log::error('apk_inject_job_failed', ['task_id' => $taskId]);

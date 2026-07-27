@@ -20,6 +20,8 @@ class JwtService
     protected int $refreshExpire;
     protected string $algorithm;
     protected string $blacklistPrefix;
+    /** SDK 会话 JWT 有效期（秒），默认 1 小时，用于注入后 APK 的卡密校验鉴权 */
+    protected int $sdkSessionExpire;
 
     public function __construct()
     {
@@ -28,6 +30,7 @@ class JwtService
         $this->refreshExpire  = (int) Config::get('jwt.refresh_expire', 604800);
         $this->algorithm      = Config::get('jwt.algorithm', 'HS256');
         $this->blacklistPrefix = Config::get('jwt.blacklist_prefix', 'jwt_blacklist:');
+        $this->sdkSessionExpire = (int) Config::get('jwt.sdk_session_expire', 3600);
 
         if (empty($this->secret) || strlen($this->secret) < 32) {
             throw new \RuntimeException('JWT secret must be configured and at least 32 characters long');
@@ -166,5 +169,75 @@ class JwtService
             return trim(substr($header, strlen($prefix)));
         }
         return null;
+    }
+
+    /**
+     * 签发 SDK 会话 JWT（Task 3 / 支撑 C2）。
+     *
+     * 用于注入后 APK 的卡密校验鉴权：SDK 用 task_token 调用 /api/v1/sdk/auth 换取本 JWT，
+     * 后续卡密校验请求通过 Authorization: Bearer <token> 鉴权（无需 app_secret）。
+     *
+     * payload 设计：
+     * - task_id / app_id / merchant_id / app_key：业务上下文
+     * - type='sdk_session'：与 access/refresh 区分，校验时严格匹配
+     * - 不含 app_secret（C2 修复核心）
+     *
+     * @param array $claims 必须包含 task_id / app_id / merchant_id / app_key
+     * @return string JWT
+     */
+    public function signSdkSession(array $claims): string
+    {
+        $now = time();
+        $payload = array_merge($claims, [
+            'iat' => $now,
+            'nbf' => $now,
+            'exp' => $now + $this->sdkSessionExpire,
+            'type' => 'sdk_session',
+            'jti' => $this->generateJti(),
+        ]);
+
+        return JWT::encode($payload, $this->secret, $this->algorithm);
+    }
+
+    /**
+     * 校验 SDK 会话 JWT。
+     *
+     * @param string $token Bearer token
+     * @return array|null 成功返回 payload，失败返回 null
+     */
+    public function verifySdkSession(string $token): ?array
+    {
+        try {
+            if ($this->isBlacklisted($token)) {
+                return null;
+            }
+
+            $decoded = JWT::decode($token, new Key($this->secret, $this->algorithm));
+            $payload = (array) $decoded;
+
+            if (($payload['type'] ?? '') !== 'sdk_session') {
+                return null;
+            }
+
+            return $payload;
+        } catch (ExpiredException $e) {
+            return null;
+        } catch (SignatureInvalidException $e) {
+            return null;
+        } catch (BeforeValidException $e) {
+            return null;
+        } catch (UnexpectedValueException $e) {
+            return null;
+        } catch (DomainException $e) {
+            return null;
+        } catch (\InvalidArgumentException $e) {
+            return null;
+        }
+    }
+
+    /** SDK 会话 JWT 有效期（秒） */
+    public function getSdkSessionExpire(): int
+    {
+        return $this->sdkSessionExpire;
     }
 }

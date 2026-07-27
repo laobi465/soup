@@ -10,7 +10,6 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Enumeration;
-import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -72,7 +71,7 @@ public class DexMerger {
                 }
             }
 
-            // 2. 复制所有原始条目（保持压缩方式）
+            // 2. 复制所有原始条目（保持压缩方式，流式复制避免 OOM）
             entries = zipIn.entries();
             while (entries.hasMoreElements()) {
                 ZipEntry src = entries.nextElement();
@@ -81,15 +80,14 @@ public class DexMerger {
                     continue;
                 }
                 ZipEntry out = new ZipEntry(src.getName());
-                byte[] data = readAll(zipIn, src);
 
                 if (src.getMethod() == ZipEntry.STORED) {
+                    // STORED 条目（如 resources.arsc / .so）必须先声明 size/crc 再写数据
+                    // 直接复用源条目元数据，避免全量读入内存计算 CRC（防止大文件 OOM）
                     out.setMethod(ZipEntry.STORED);
-                    out.setSize(data.length);
-                    out.setCompressedSize(data.length);
-                    CRC32 crc = new CRC32();
-                    crc.update(data);
-                    out.setCrc(crc.getValue());
+                    out.setSize(src.getSize());
+                    out.setCompressedSize(src.getCompressedSize());
+                    out.setCrc(src.getCrc());
                 } else {
                     out.setMethod(ZipEntry.DEFLATED);
                 }
@@ -98,7 +96,10 @@ public class DexMerger {
                     out.setTime(src.getTime());
                 }
                 zos.putNextEntry(out);
-                zos.write(data);
+                // 流式复制：不一次性 readAllBytes，使用 transferTo 直传
+                try (InputStream is = zipIn.getInputStream(src)) {
+                    is.transferTo(zos);
+                }
                 zos.closeEntry();
             }
 
@@ -137,9 +138,4 @@ public class DexMerger {
                 || lower.endsWith(".ec");
     }
 
-    private byte[] readAll(ZipFile zipFile, ZipEntry entry) throws Exception {
-        try (InputStream is = zipFile.getInputStream(entry)) {
-            return is.readAllBytes();
-        }
-    }
 }

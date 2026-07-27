@@ -33,7 +33,8 @@ import java.util.concurrent.TimeUnit;
  *     <ul>
  *       <li>替换 {@code <application android:name>} 为 {@link #KAMI_PROXY_APPLICATION}；</li>
  *       <li>在 {@code <application>} 内插入 meta-data 保存原 Application 类名与 SDK 配置
- *           （app_key/app_secret/base_url），供 KamiProxyApplication 读取；</li>
+ *           （app_key/task_token/base_url —— <b>不含 app_secret</b>，见 Task 2 / C2），
+ *           供 KamiProxyApplication 读取；</li>
  *       <li>若缺少 {@code INTERNET} 权限则补上。</li>
  *     </ul>
  *   </li>
@@ -103,9 +104,11 @@ public class ManifestModifier {
         application.setAttribute(ANDROID_NAME, KAMI_PROXY_APPLICATION);
 
         // 2c. 插入 meta-data（放在 application 第一个子节点前）
+        // 安全说明（Task 2 / C2）：不再写入 kami_app_secret，改为 kami_task_token
+        // SDK 运行时用 task_token 调用 /api/v1/sdk/auth 换取短期 JWT，appSecret 永不落地 APK
         insertMetaData(doc, application, "kami_original_application", originalApp);
         insertMetaData(doc, application, "kami_app_key", nullToEmpty(request.getAppKey()));
-        insertMetaData(doc, application, "kami_app_secret", nullToEmpty(request.getAppSecret()));
+        insertMetaData(doc, application, "kami_task_token", nullToEmpty(request.getTaskToken()));
         insertMetaData(doc, application, "kami_base_url", nullToEmpty(request.getBaseUrl()));
 
         // 2d. 补 INTERNET 权限（如缺失）

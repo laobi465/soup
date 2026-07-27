@@ -16,6 +16,9 @@ class ApkInjectTask extends Model
     protected $json = ['sdk_config'];
     protected $jsonAssoc = true;
 
+    // 屏蔽敏感字段，避免通过 API 泄露（sdk_config 含配置，task_token 是注入凭证）
+    protected $hidden = ['sdk_config', 'task_token'];
+
     const STATUS_PENDING = 1;
     const STATUS_PROCESSING = 2;
     const STATUS_COMPLETED = 3;

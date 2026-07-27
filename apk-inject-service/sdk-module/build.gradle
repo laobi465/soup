@@ -17,8 +17,16 @@ android {
     }
 
     // 仅编译 SDK 自身类，不打包任何外部依赖
-    // 故意不引入 AndroidX（含 MultiDex），MultiDex 通过 KamiProxyApplication 反射调用，
-    // 保证注入后的 kami-sdk.dex 零外部依赖、与宿主 APK 无版本冲突。
+    // —— I7 修复决策（不使用 multiDexEnabled / multiDexKeepFile）——
+    // 1) 本模块是 library，编译产物为独立的 kami-sdk.dex；DexMerger 把它追加为
+    //    classes(N+1).dex，KamiProxyApplication 必然位于 secondary dex。
+    // 2) multiDexEnabled / multiDexKeepFile 是 application 模块级别的 Gradle 设置，
+    //    只影响宿主 APK 自身的 dex 布局，对注入的独立 dex 无效。
+    // 3) API 21+ 的 ART 原生支持 multidex（安装时合并所有 classes*.dex），secondary dex
+    //    中的 Application 类可正常加载；API < 21 的 Dalvik 不支持，会崩溃。
+    // 4) 因此安全策略改为：ApkParser.parse() 拒绝 minSdk<21 的 APK 注入（见 CP-8.11），
+    //    而非依赖 multiDexKeepFile。同时 attachBaseContext 反射调用 MultiDex.install
+    //    作为宿主自身 multidex 的兼容兜底（若宿主已引入 AndroidX）。
 }
 
 dependencies {

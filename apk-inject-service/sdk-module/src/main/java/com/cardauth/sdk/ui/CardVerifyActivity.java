@@ -1,57 +1,46 @@
 package com.cardauth.sdk.ui;
 
 import android.app.Activity;
-import android.content.Context;
-import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Looper;
 import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.util.Log;
 import android.view.Gravity;
-import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.cardauth.sdk.CardAuthClient;
+import com.cardauth.sdk.KamiProxyApplication;
 import com.cardauth.sdk.model.ApiResponse;
 import com.cardauth.sdk.model.CardVerifyResult;
 
 /**
- * 卡密验证 UI（简化版）。
+ * 卡密验证 UI（Task 8 / I6 实装）。
  *
- * <p>由 {@code KamiProxyApplication} 在校验失败时拉起（或由宿主在需要时启动）。
- * 界面极简：一个卡密输入框 + 一个“验证”按钮 + 一行结果提示，
+ * <p>由 {@link KamiProxyApplication} 的 {@code CardVerifyLifecycle} 在首个 Activity 启动时
+ * 拉起（若卡密未校验）。界面极简：卡密输入框 + 验证按钮 + 结果提示，
  * 全部用代码构建（不依赖宿主资源，避免 R.id 冲突）。
  *
- * <p>配置（appKey/appSecret/baseUrl）从 AndroidManifest 的 meta-data 读取，
- * 与 {@code KamiProxyApplication} 保持一致。
+ * <p><b>鉴权模式</b>（Task 2 / Task 3）：本 Activity 不再自行读取 app_secret 或构造
+ * {@code CardAuthClient}，而是委托给 {@link KamiProxyApplication#verifyCard}，由 Application
+ * 用已换取的 JWT 通过 Bearer 鉴权调用卡密验证接口（app_secret 永不落地 APK）。
  */
 public class CardVerifyActivity extends Activity {
 
     private static final String TAG = "KamiVerifyUI";
-    private static final String META_APP_KEY = "kami_app_key";
-    private static final String META_APP_SECRET = "kami_app_secret";
-    private static final String META_BASE_URL = "kami_base_url";
 
     private EditText cardInput;
     private TextView resultText;
     private Button verifyButton;
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
 
-    private String appKey;
-    private String appSecret;
-    private String baseUrl;
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        readMetaData(this);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -90,30 +79,20 @@ public class CardVerifyActivity extends Activity {
         setContentView(root);
     }
 
-    private void readMetaData(Context ctx) {
-        try {
-            ApplicationInfo ai = ctx.getPackageManager()
-                    .getApplicationInfo(ctx.getPackageName(), PackageManager.GET_META_DATA);
-            if (ai.metaData != null) {
-                appKey = ai.metaData.getString(META_APP_KEY, "");
-                appSecret = ai.metaData.getString(META_APP_SECRET, "");
-                baseUrl = ai.metaData.getString(META_BASE_URL, "");
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to read meta-data", e);
-        }
-    }
-
     private void doVerify() {
         String cardNo = cardInput.getText() == null ? "" : cardInput.getText().toString().trim();
         if (cardNo.isEmpty()) {
             toast("请输入卡密");
             return;
         }
-        if (appKey == null || appKey.isEmpty() || baseUrl == null || baseUrl.isEmpty()) {
-            resultText.setText("SDK 配置缺失（appKey/baseUrl 未设置）");
+
+        // 获取 Application（应为 KamiProxyApplication）
+        android.app.Application app = getApplication();
+        if (!(app instanceof KamiProxyApplication)) {
+            resultText.setText("SDK 初始化异常（Application 不是 KamiProxyApplication）");
             return;
         }
+        KamiProxyApplication kamiApp = (KamiProxyApplication) app;
 
         verifyButton.setEnabled(false);
         resultText.setText("验证中...");
@@ -122,17 +101,17 @@ public class CardVerifyActivity extends Activity {
         final String deviceName = Build.MODEL;
         final String card = cardNo;
 
+        // 委托给 Application 的 verifyCard（使用 JWT Bearer 鉴权，不依赖 app_secret）
         new Thread(() -> {
-            CardAuthClient client = new CardAuthClient(appKey, appSecret, baseUrl);
-            final ApiResponse<CardVerifyResult> result = client.verify(card, fingerprint, deviceName);
+            final ApiResponse<CardVerifyResult> result = kamiApp.verifyCard(card, fingerprint, deviceName);
             uiHandler.post(() -> {
                 verifyButton.setEnabled(true);
-                if (result.isSuccess() && result.getData() != null) {
+                if (result.getCode() == 0 && result.getData() != null) {
                     CardVerifyResult d = result.getData();
                     resultText.setText("验证成功\n状态: " + d.getStatusText()
                             + "\n到期: " + (d.isPermanent() ? "永久" : d.getExpireTime()));
                     toast("验证成功");
-                    // 验证通过，结束验证界面
+                    // 验证通过，结束验证界面，回到主 Activity
                     finish();
                 } else {
                     resultText.setText("验证失败: " + result.getMessage());
@@ -140,6 +119,12 @@ public class CardVerifyActivity extends Activity {
                 }
             });
         }).start();
+    }
+
+    @Override
+    public void onBackPressed() {
+        // 禁止返回键跳过卡密校验（防止绕过）
+        toast("请先完成卡密验证");
     }
 
     private void toast(String msg) {

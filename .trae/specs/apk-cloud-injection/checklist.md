@@ -19,7 +19,7 @@
 ## 数据库
 - [x] Checkpoint 13: apk_inject_tasks 表迁移文件存在且语法正确
 - [x] Checkpoint 14: 表包含所有必需字段（id/merchant_id/app_id/status/progress/error_log 等）
-- [x] Checkpoint 15: 索引包含 idx_merchant_id、idx_status、uk_file_sha256
+- [x] Checkpoint 15: 索引包含 idx_merchant_id、idx_status、idx_file_sha256（非唯一索引，允许同 SHA-256 24h 内复用上传）
 - [x] Checkpoint 16: ApkInjectTask 模型类存在且可实例化
 
 ## PHP 后端
@@ -32,7 +32,7 @@
 - [x] Checkpoint 23: download 接口返回 presigned URL
 - [x] Checkpoint 24: ApkInjectJob 正确调用 Java 微服务
 - [x] Checkpoint 25: 任务状态正确流转（排队→处理中→完成/失败）
-- [x] Checkpoint 26: 并发限制使用 Redis 原子计数
+- [x] Checkpoint 26: 并发限制使用 Redis Lua 原子操作（acquireConcurrentSlot: INCR→超限 DECR 回滚；decrementConcurrent: DECR→负数 INCR 回补）
 
 ## Java 注入微服务
 - [x] Checkpoint 27: /api/v1/health 健康检查返回 200

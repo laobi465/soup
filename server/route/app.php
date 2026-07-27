@@ -294,3 +294,11 @@ Route::group('api/v1', function () {
     \app\middleware\ApiAuthMiddleware::class,
     \app\middleware\ApiRateLimitMiddleware::class,
 ]);
+
+// Task 3: SDK 鉴权接口（公开接口，不走 ApiAuthMiddleware HMAC 校验）
+// 注入后 APK 用 task_token 换取短期 JWT，后续卡密校验用 Bearer 鉴权
+Route::group('api/v1/sdk', function () {
+    Route::post('auth', 'api.SdkAuthController/auth');
+})->middleware([
+    \app\middleware\ApiRateLimitMiddleware::class,
+]);

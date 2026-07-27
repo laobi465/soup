@@ -25,7 +25,13 @@ import java.util.Map;
  * <ul>
  *   <li>移除 Gson 依赖，改用 Android 自带的 {@code org.json}，避免与宿主 APK 的 Gson 版本冲突，
  *       同时让 kami-sdk.dex 零外部依赖、体积更小；</li>
- *   <li>响应解析改为手动从 {@link JSONObject} 取值并填充 POJO，不再依赖反射反序列化。</li>
+ *   <li>响应解析改为手动从 {@code JSONObject} 取值并填充 POJO，不再依赖反射反序列化；</li>
+ *   <li>支持两种鉴权模式（Task 2 / Task 3）：
+ *     <ul>
+ *       <li>HMAC 模式（开发者集成）：appKey + appSecret 签名，兼容现有 API；</li>
+ *       <li>JWT 模式（注入 SDK）：Bearer token，由 task_token 换取，不依赖 appSecret。</li>
+ *     </ul>
+ *   </li>
  * </ul>
  */
 public class CardAuthClient {
@@ -33,11 +39,17 @@ public class CardAuthClient {
     private final String appKey;
     private final String appSecret;
     private final String baseUrl;
+    /** JWT Bearer token（注入 SDK 模式），非空时优先于 HMAC 签名 */
+    private final String jwtToken;
     private static final int TIMEOUT = 15000;
 
+    /**
+     * HMAC 鉴权构造函数（开发者集成模式，需 appSecret）。
+     */
     public CardAuthClient(String appKey, String appSecret, String baseUrl) {
         this.appKey = appKey;
         this.appSecret = appSecret;
+        this.jwtToken = null;
         if (baseUrl == null || baseUrl.isEmpty()) {
             this.baseUrl = "";
         } else if (baseUrl.endsWith("/")) {
@@ -45,6 +57,30 @@ public class CardAuthClient {
         } else {
             this.baseUrl = baseUrl;
         }
+    }
+
+    /**
+     * JWT 鉴权构造函数（注入 SDK 模式，无需 appSecret）。
+     *
+     * @param jwtToken 由 task_token 通过 {@code POST /api/v1/sdk/auth} 换取的 Bearer token
+     * @param baseUrl  平台 API base url
+     */
+    public CardAuthClient(String jwtToken, String baseUrl) {
+        this.appKey = "";
+        this.appSecret = null;
+        this.jwtToken = jwtToken;
+        if (baseUrl == null || baseUrl.isEmpty()) {
+            this.baseUrl = "";
+        } else if (baseUrl.endsWith("/")) {
+            this.baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
+        } else {
+            this.baseUrl = baseUrl;
+        }
+    }
+
+    /** 是否使用 JWT 鉴权模式 */
+    private boolean isJwtMode() {
+        return jwtToken != null && !jwtToken.isEmpty();
     }
 
     /** 响应解析器：从原始 JSONObject 构造 {@link ApiResponse}。 */
@@ -55,10 +91,7 @@ public class CardAuthClient {
     private <T> ApiResponse<T> sendRequest(String method, String path, Map<String, Object> data,
                                            ResponseParser<T> parser) {
         try {
-            String timestamp = SignUtil.getTimestamp();
-            String nonce = SignUtil.generateNonce();
             String body = data != null ? toJson(data) : "";
-            String sign = SignUtil.sign(method, path, timestamp, nonce, body, appSecret);
 
             URL url = new URL(baseUrl + path);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -66,10 +99,20 @@ public class CardAuthClient {
             conn.setConnectTimeout(TIMEOUT);
             conn.setReadTimeout(TIMEOUT);
             conn.setRequestProperty("Content-Type", "application/json");
-            conn.setRequestProperty("X-AppKey", appKey);
-            conn.setRequestProperty("X-Timestamp", timestamp);
-            conn.setRequestProperty("X-Nonce", nonce);
-            conn.setRequestProperty("X-Sign", sign);
+
+            if (isJwtMode()) {
+                // JWT 模式（注入 SDK）：Authorization: Bearer <token>
+                conn.setRequestProperty("Authorization", "Bearer " + jwtToken);
+            } else {
+                // HMAC 模式（开发者集成）：appKey + 签名头
+                String timestamp = SignUtil.getTimestamp();
+                String nonce = SignUtil.generateNonce();
+                String sign = SignUtil.sign(method, path, timestamp, nonce, body, appSecret);
+                conn.setRequestProperty("X-AppKey", appKey);
+                conn.setRequestProperty("X-Timestamp", timestamp);
+                conn.setRequestProperty("X-Nonce", nonce);
+                conn.setRequestProperty("X-Sign", sign);
+            }
 
             if (data != null && !"GET".equalsIgnoreCase(method)) {
                 conn.setDoOutput(true);

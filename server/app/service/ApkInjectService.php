@@ -15,10 +15,12 @@ class ApkInjectService
     private const MAX_CONCURRENT = 3; // 单商户最大并发
     private const DEDUP_WINDOW = 86400; // 24小时去重窗口
     private const CONCURRENT_KEY = 'apk_inject:concurrent:';
+    private const CONCURRENT_TTL = 7200; // 并发计数器 2 小时过期（兜底）
     private const QUEUE_NAME = 'apk-inject';
 
     /**
-     * 创建注入任务
+     * 创建注入任务（不占用并发额度，仅记录任务）
+     * 并发计数在 dispatchTask 时原子获取，避免放弃上传导致计数泄漏。
      */
     public function createTask(int $merchantId, int $appId, string $filename, int $fileSize, string $sha256): array
     {
@@ -28,7 +30,8 @@ class ApkInjectService
             throw new \RuntimeException('应用不存在或无权限');
         }
 
-        // 2. 并发限制校验（使用 Redis）
+        // 2. 并发限制预校验（软校验，真实原子校验在 dispatchTask）
+        // 此处仅用于快速拒绝明显超限的请求，不依赖此校验保证原子性
         $redis = Cache::store('redis')->handler();
         $concurrentKey = self::CONCURRENT_KEY . $merchantId;
         $current = (int) $redis->get($concurrentKey);
@@ -53,22 +56,16 @@ class ApkInjectService
         // 5. 生成 presigned 上传 URL
         $uploadUrl = StorageService::getApkPresignedUploadUrl($sourcePath, 300);
 
-        // 6. 解密 app_secret 并生成 SDK 配置
-        $plainSecret = '';
-        if (!empty($app->app_secret_encrypted)) {
-            $decrypted = AesEncrypt::decrypt($app->app_secret_encrypted);
-            if ($decrypted !== false) {
-                $plainSecret = $decrypted;
-            }
-        }
+        // 6. 生成 task_token（替代明文 app_secret，见 Task 2）
+        $taskToken = bin2hex(random_bytes(32));
 
+        // 7. SDK 配置只存非敏感信息（app_secret 不落库，Job 执行时实时解密取用）
         $sdkConfig = json_encode([
             'app_key' => $app->app_key,
-            'app_secret' => $plainSecret,
             'base_url' => env('app.base_url', 'https://api.example.com'),
         ], JSON_UNESCAPED_UNICODE);
 
-        // 7. 创建任务记录
+        // 8. 创建任务记录（不 INCR 并发计数，dispatchTask 时才占用额度）
         $task = ApkInjectTask::create([
             'merchant_id' => $merchantId,
             'app_id' => $appId,
@@ -79,12 +76,9 @@ class ApkInjectService
             'original_filename' => $filename,
             'status' => ApkInjectTask::STATUS_PENDING,
             'progress' => 0,
+            'task_token' => $taskToken,
             'sdk_config' => $sdkConfig,
         ]);
-
-        // 8. 并发计数+1
-        $redis->incr($concurrentKey);
-        $redis->expire($concurrentKey, 7200); // 2小时过期
 
         return [
             'task_id' => $task->id,
@@ -96,6 +90,7 @@ class ApkInjectService
     /**
      * 任务上传完成后投递队列
      * （前端上传到 MinIO 成功后调用此接口通知后端）
+     * 并发计数在此处原子获取，避免放弃上传导致计数泄漏。
      */
     public function dispatchTask(int $taskId, int $merchantId): void
     {
@@ -107,7 +102,55 @@ class ApkInjectService
             throw new \RuntimeException('任务状态不允许投递');
         }
 
-        Queue::push('app\job\ApkInjectJob', ['task_id' => $taskId], self::QUEUE_NAME);
+        // 校验文件已上传到 MinIO 且大小一致（防止未上传或大小不符就投递）
+        $fileInfo = StorageService::getApkStorageDriver()->getFileInfo($task->source_path);
+        if (empty($fileInfo)) {
+            throw new \RuntimeException('文件未上传或不存在，请先上传APK');
+        }
+        if ((int)($fileInfo['size'] ?? 0) !== (int)$task->file_size) {
+            throw new \RuntimeException(sprintf(
+                '文件大小不匹配：声明 %d 字节，实际上传 %d 字节',
+                $task->file_size,
+                $fileInfo['size'] ?? 0
+            ));
+        }
+
+        // 原子获取并发槽位（Lua 脚本：INCR→若 >MAX 则 DECR 回退→否则 EXPIRE）
+        if (!$this->acquireConcurrentSlot($merchantId)) {
+            throw new \RuntimeException('并发任务数超限，请等待已有任务完成');
+        }
+
+        try {
+            Queue::push('app\job\ApkInjectJob', ['task_id' => $taskId], self::QUEUE_NAME);
+        } catch (\Exception $e) {
+            // 投队列失败，回退并发计数
+            self::decrementConcurrent($merchantId);
+            throw new \RuntimeException('任务投递失败: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * 原子获取并发槽位（Lua 脚本保证 INCR 与超限回退的原子性）
+     * 返回 true 表示获取成功，false 表示已达上限
+     */
+    private function acquireConcurrentSlot(int $merchantId): bool
+    {
+        $redis = Cache::store('redis')->handler();
+        $concurrentKey = self::CONCURRENT_KEY . $merchantId;
+
+        // Lua 脚本：原子 INCR，超限则 DECR 回退并返回 -1
+        $lua = <<<'LUA'
+local c = redis.call('INCR', KEYS[1])
+if c > tonumber(ARGV[1]) then
+    redis.call('DECR', KEYS[1])
+    return -1
+end
+redis.call('EXPIRE', KEYS[1], ARGV[2])
+return c
+LUA;
+
+        $result = $redis->eval($lua, [$concurrentKey, self::MAX_CONCURRENT, self::CONCURRENT_TTL], 1);
+        return $result !== false && (int) $result > 0;
     }
 
     /**
@@ -149,7 +192,7 @@ class ApkInjectService
     }
 
     /**
-     * 任务详情
+     * 任务详情（屏蔽 sdk_config 敏感字段）
      */
     public function getDetail(int $taskId, int $merchantId): array
     {
@@ -157,21 +200,33 @@ class ApkInjectService
         if (!$task) {
             throw new \RuntimeException('任务不存在');
         }
-        return $task->toArray();
+        $data = $task->toArray();
+        // 二次保险：即使模型 $hidden 失效也不泄露 sdk_config
+        unset($data['sdk_config']);
+        return $data;
     }
 
     /**
-     * 任务完成后减少并发计数
+     * 原子减少并发计数（Lua 脚本保证 DECR 与防负数回补的原子性）
+     * 在任务终态（完成/失败）时调用
      */
     public static function decrementConcurrent(int $merchantId): void
     {
         try {
             $redis = Cache::store('redis')->handler();
             $concurrentKey = self::CONCURRENT_KEY . $merchantId;
-            $current = (int) $redis->get($concurrentKey);
-            if ($current > 0) {
-                $redis->decr($concurrentKey);
-            }
+
+            // Lua 脚本：原子 DECR，若结果 <0 则 INCR 回补（防计数器欠账）
+            $lua = <<<'LUA'
+local c = redis.call('DECR', KEYS[1])
+if c < 0 then
+    redis.call('INCR', KEYS[1])
+    return 0
+end
+return c
+LUA;
+
+            $redis->eval($lua, [$concurrentKey], 1);
         } catch (\Exception $e) {
             Log::warning('apk_inject_decrement_concurrent_failed', [
                 'merchant_id' => $merchantId,
