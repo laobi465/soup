@@ -118,14 +118,20 @@ class CaihongPay extends PaymentDriver
 
     protected function generateSign(array $params, string $key): string
     {
-        ksort($params);
-        reset($params);
+        // 彩虹支付官方文档签名白名单字段 (I6)
+        // 防止网关下发额外字段导致合法回调被误杀, 也防止伪造字段注入签名
+        $signFields = ['pid', 'trade_no', 'out_trade_no', 'type', 'name', 'money', 'trade_status'];
+        $signData = [];
+        foreach ($signFields as $field) {
+            if (isset($params[$field]) && $params[$field] !== '' && $params[$field] !== null) {
+                $signData[$field] = $params[$field];
+            }
+        }
+        ksort($signData);
+        reset($signData);
 
         $signStr = '';
-        foreach ($params as $k => $v) {
-            if ($k == 'sign' || $k == 'sign_type' || $v === '' || $v === null) {
-                continue;
-            }
+        foreach ($signData as $k => $v) {
             $signStr .= $k . '=' . $v . '&';
         }
         $signStr = trim($signStr, '&');

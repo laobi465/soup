@@ -40,51 +40,66 @@ class ApkInjectService
         }
 
         // 3. SHA-256 去重（24小时内）
-        $existing = ApkInjectTask::where('file_sha256', $sha256)
-            ->where('merchant_id', $merchantId)
-            ->where('created_at', '>', date('Y-m-d H:i:s', time() - self::DEDUP_WINDOW))
-            ->whereIn('status', [ApkInjectTask::STATUS_PENDING, ApkInjectTask::STATUS_PROCESSING, ApkInjectTask::STATUS_COMPLETED])
-            ->find();
-        if ($existing) {
-            throw new \RuntimeException('该APK在24小时内已提交过注入任务');
+        // 用 Redis 分布锁防止并发请求绕过去重 (C6)
+        $dedupLockKey = 'apk_dedup:' . $sha256 . ':' . $merchantId;
+        $lockToken = bin2hex(random_bytes(8));
+        $redis = Cache::store('redis')->handler();
+        $lockAcquired = $redis->set($dedupLockKey, $lockToken, ['NX', 'EX' => 5]);
+        if (!$lockAcquired) {
+            throw new \RuntimeException('该APK正在处理中，请稍后重试');
         }
 
-        // 4. 生成任务编号和存储路径
-        $taskNo = 'APK' . date('YmdHis') . str_pad((string)mt_rand(0, 9999), 4, '0', STR_PAD_LEFT);
-        $sourcePath = sprintf('apk-source/%s/%s.apk', date('Ymd'), $taskNo);
+        try {
+            $existing = ApkInjectTask::where('file_sha256', $sha256)
+                ->where('merchant_id', $merchantId)
+                ->where('created_at', '>', date('Y-m-d H:i:s', time() - self::DEDUP_WINDOW))
+                ->whereIn('status', [ApkInjectTask::STATUS_PENDING, ApkInjectTask::STATUS_PROCESSING, ApkInjectTask::STATUS_COMPLETED])
+                ->find();
+            if ($existing) {
+                throw new \RuntimeException('该APK在24小时内已提交过注入任务');
+            }
 
-        // 5. 生成 presigned 上传 URL
-        $uploadUrl = StorageService::getApkPresignedUploadUrl($sourcePath, 300);
+            // 4. 生成任务编号和存储路径 (M5: mt_rand → random_int)
+            $taskNo = 'APK' . date('YmdHis') . str_pad((string)random_int(0, 9999), 4, '0', STR_PAD_LEFT);
+            $sourcePath = sprintf('apk-source/%s/%s.apk', date('Ymd'), $taskNo);
 
-        // 6. 生成 task_token（替代明文 app_secret，见 Task 2）
-        $taskToken = bin2hex(random_bytes(32));
+            // 5. 生成 presigned 上传 URL
+            $uploadUrl = StorageService::getApkPresignedUploadUrl($sourcePath, 300);
 
-        // 7. SDK 配置只存非敏感信息（app_secret 不落库，Job 执行时实时解密取用）
-        $sdkConfig = json_encode([
-            'app_key' => $app->app_key,
-            'base_url' => env('app.base_url', 'https://api.example.com'),
-        ], JSON_UNESCAPED_UNICODE);
+            // 6. 生成 task_token（替代明文 app_secret，见 Task 2）
+            $taskToken = bin2hex(random_bytes(32));
 
-        // 8. 创建任务记录（不 INCR 并发计数，dispatchTask 时才占用额度）
-        $task = ApkInjectTask::create([
-            'merchant_id' => $merchantId,
-            'app_id' => $appId,
-            'task_no' => $taskNo,
-            'source_path' => $sourcePath,
-            'file_sha256' => $sha256,
-            'file_size' => $fileSize,
-            'original_filename' => $filename,
-            'status' => ApkInjectTask::STATUS_PENDING,
-            'progress' => 0,
-            'task_token' => $taskToken,
-            'sdk_config' => $sdkConfig,
-        ]);
+            // 7. SDK 配置只存非敏感信息（app_secret 不落库，Job 执行时实时解密取用）
+            $sdkConfig = json_encode([
+                'app_key' => $app->app_key,
+                'base_url' => env('app.base_url', 'https://api.example.com'),
+            ], JSON_UNESCAPED_UNICODE);
 
-        return [
-            'task_id' => $task->id,
-            'task_no' => $taskNo,
-            'upload_url' => $uploadUrl,
-        ];
+            // 8. 创建任务记录（不 INCR 并发计数，dispatchTask 时才占用额度）
+            $task = ApkInjectTask::create([
+                'merchant_id' => $merchantId,
+                'app_id' => $appId,
+                'task_no' => $taskNo,
+                'source_path' => $sourcePath,
+                'file_sha256' => $sha256,
+                'file_size' => $fileSize,
+                'original_filename' => $filename,
+                'status' => ApkInjectTask::STATUS_PENDING,
+                'progress' => 0,
+                'task_token' => $taskToken,
+                'sdk_config' => $sdkConfig,
+            ]);
+
+            return [
+                'task_id' => $task->id,
+                'task_no' => $taskNo,
+                'upload_url' => $uploadUrl,
+            ];
+        } finally {
+            // Lua 脚本释放锁 (仅释放自己的, 避免误删其他请求的锁)
+            $lua = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+            $redis->eval($lua, [$dedupLockKey, $lockToken], 1);
+        }
     }
 
     /**

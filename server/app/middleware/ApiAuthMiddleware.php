@@ -121,6 +121,13 @@ class ApiAuthMiddleware
 
         $method = strtoupper($request->method());
         $path = $request->baseUrl();
+
+        // M6: 读取 php://input 前校验 Content-Length, 防止超大 body 导致内存耗尽 DoS
+        $contentLength = intval($_SERVER['CONTENT_LENGTH'] ?? 0);
+        if ($contentLength > 10 * 1024 * 1024) { // 10MB
+            return $this->errorResponse(413, '请求体过大');
+        }
+
         $body = file_get_contents('php://input');
         if ($body === false) {
             $body = '';
@@ -188,11 +195,53 @@ class ApiAuthMiddleware
 
     protected function ipInCidr(string $ip, string $cidr): bool
     {
-        list($subnet, $mask) = explode('/', $cidr);
-        $ipLong = ip2long($ip);
-        $subnetLong = ip2long($subnet);
-        $maskLong = -1 << (32 - intval($mask));
-        return ($ipLong & $maskLong) == ($subnetLong & $maskLong);
+        // 无 / 的单 IP 直接比较
+        if (strpos($cidr, '/') === false) {
+            return $ip === $cidr;
+        }
+        list($subnet, $mask) = explode('/', $cidr, 2);
+        $mask = (int)$mask;
+
+        // IPv4
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) &&
+            filter_var($subnet, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            if ($mask < 0 || $mask > 32) {
+                return false;
+            }
+            $ipLong = ip2long($ip);
+            $subnetLong = ip2long($subnet);
+            $maskLong = $mask === 0 ? 0 : (-1 << (32 - $mask));
+            return ($ipLong & $maskLong) === ($subnetLong & $maskLong);
+        }
+
+        // IPv6 (C5: 原 ip2long 对 IPv6 返回 false, 导致误判)
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) &&
+            filter_var($subnet, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            if ($mask < 0 || $mask > 128) {
+                return false;
+            }
+            $ipBin = inet_pton($ip);
+            $subnetBin = inet_pton($subnet);
+            $maskFull = (int)($mask / 8);
+            $maskPartial = $mask % 8;
+
+            // 比较完整字节
+            if ($maskFull > 0 && substr($ipBin, 0, $maskFull) !== substr($subnetBin, 0, $maskFull)) {
+                return false;
+            }
+            // 比较部分字节
+            if ($maskPartial > 0) {
+                $ipByte = ord($ipBin[$maskFull]);
+                $subnetByte = ord($subnetBin[$maskFull]);
+                $maskBits = (0xff << (8 - $maskPartial)) & 0xff;
+                if (($ipByte & $maskBits) !== ($subnetByte & $maskBits)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        return false;
     }
 
     protected function ipMatchWildcard(string $ip, string $pattern): bool

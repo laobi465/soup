@@ -134,13 +134,19 @@ class JwtService
 
     public function isBlacklisted(string $token): bool
     {
-        $payload = $this->getPayloadWithoutVerify($token);
-        if (!$payload) {
-            return false;
+        // 先验签再用 payload['jti'] 查询黑名单 (I5)
+        // 防止攻击者构造任意 jti 探测哪些已加入黑名单
+        try {
+            $payload = JWT::decode($token, new Key($this->secret, $this->algorithm ?: 'HS256'));
+            $jti = $payload->jti ?? null;
+            if (!$jti) {
+                return false;
+            }
+            return Cache::store('redis')->has($this->blacklistPrefix . $jti);
+        } catch (\Exception $e) {
+            // 验签失败/格式错误/过期 → 视为已失效 (拒绝)
+            return true;
         }
-
-        $jti = $payload['jti'] ?? md5($token);
-        return Cache::store('redis')->has($this->blacklistPrefix . $jti);
     }
 
     protected function getPayloadWithoutVerify(string $token): ?array

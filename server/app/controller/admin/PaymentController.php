@@ -6,6 +6,7 @@ namespace app\controller\admin;
 use app\BaseController;
 use app\model\Order;
 use app\service\PaymentService;
+use app\library\AesEncrypt;
 use think\Request;
 use think\facade\Db;
 
@@ -21,11 +22,28 @@ class PaymentController extends BaseController
     {
         $data = $request->param();
 
+        // 输入校验 (I7)
+        $apiUrl = $data['caihong_api_url'] ?? '';
+        $pid = $data['caihong_pid'] ?? '';
+        $key = $data['caihong_key'] ?? '';
+
+        // api_url 必须是 https URL
+        if (!empty($apiUrl)) {
+            if (!filter_var($apiUrl, FILTER_VALIDATE_URL) || strpos($apiUrl, 'https://') !== 0) {
+                return error('api_url 必须是有效的 https URL');
+            }
+        }
+
+        // pid 必须是整数
+        if (!empty($pid) && !ctype_digit(strval($pid))) {
+            return error('pid 必须是整数');
+        }
+
         $caihongConfig = [
             'enabled' => intval($data['caihong_enabled'] ?? 0),
-            'api_url' => $data['caihong_api_url'] ?? '',
-            'pid' => $data['caihong_pid'] ?? '',
-            'key' => $data['caihong_key'] ?? '',
+            'api_url' => $apiUrl,
+            'pid' => $pid,
+            'key' => $key,
         ];
 
         $this->savePaymentConfigToDb($caihongConfig);
@@ -62,7 +80,9 @@ class PaymentController extends BaseController
             } elseif ($key === 'payment_caihong_pid') {
                 $caihong['pid'] = $value;
             } elseif ($key === 'payment_caihong_key') {
-                $caihong['key'] = $value;
+                // 读取时解密 (I7)
+                $decrypted = AesEncrypt::decrypt($value);
+                $caihong['key'] = ($decrypted !== false) ? $decrypted : $value;
             }
         }
 
@@ -72,11 +92,17 @@ class PaymentController extends BaseController
 
     protected function savePaymentConfigToDb(array $caihongConfig): void
     {
+        // key 加密落库 (I7), 与 app_secret 安全实践一致
+        $keyValue = $caihongConfig['key'] ?? '';
+        if (!empty($keyValue)) {
+            $keyValue = AesEncrypt::encrypt($keyValue);
+        }
+
         $items = [
             'payment_caihong_enabled' => strval($caihongConfig['enabled'] ?? 0),
             'payment_caihong_api_url' => $caihongConfig['api_url'] ?? '',
             'payment_caihong_pid' => $caihongConfig['pid'] ?? '',
-            'payment_caihong_key' => $caihongConfig['key'] ?? '',
+            'payment_caihong_key' => $keyValue,
         ];
 
         foreach ($items as $key => $value) {

@@ -224,10 +224,6 @@ class PaymentService
             }
 
             $merchant = Merchant::where('id', $order->merchant_id)->lock(true)->find();
-            if ($merchant && $order->type == Order::TYPE_RECHARGE) {
-                $merchant->balance = bcadd(strval($merchant->balance), strval($order->amount), 2);
-                $merchant->save();
-            }
 
             $this->processOrderPaid($order);
 
@@ -275,12 +271,17 @@ class PaymentService
 
     protected function processRecharge(Order $order): void
     {
-        $merchant = Merchant::where('id', $order->merchant_id)->find();
+        // 在 handleNotify 的事务内调用, merchant 已被 lock(true)
+        $merchant = Merchant::where('id', $order->merchant_id)->lock(true)->find();
         if (!$merchant) {
             return;
         }
 
-        $wallet = Wallet::where('user_id', $merchant->user_id)->where('type', 1)->find();
+        // 钱包加行锁防并发 (I1)
+        $wallet = Wallet::where('user_id', $merchant->user_id)
+            ->where('type', 1)
+            ->lock(true)
+            ->find();
         if (!$wallet) {
             $wallet = new Wallet();
             $wallet->user_id = $merchant->user_id;
@@ -289,9 +290,12 @@ class PaymentService
             $wallet->frozen = 0;
         }
 
-        $oldBalance = $wallet->balance;
         $wallet->balance = bcadd(strval($wallet->balance), strval($order->amount), 2);
         $wallet->save();
+
+        // 同步 merchant.balance (冗余字段, 保持与 wallet.balance 一致, 避免 C1 双记)
+        $merchant->balance = $wallet->balance;
+        $merchant->save();
 
         $transaction = new WalletTransaction();
         $transaction->wallet_id = $wallet->id;
@@ -350,10 +354,37 @@ class PaymentService
             $order->save();
 
             if ($order->type == Order::TYPE_RECHARGE) {
-                $merchant = Merchant::where('id', $order->merchant_id)->find();
+                // 充值退款: 校验余额 + 同步扣减 wallet.balance (I2)
+                $merchant = Merchant::where('id', $order->merchant_id)->lock(true)->find();
                 if ($merchant) {
+                    // 余额校验: 避免余额不足导致负数
+                    if (bccomp(strval($merchant->balance), strval($order->amount), 2) < 0) {
+                        Db::rollback();
+                        return ['success' => false, 'message' => '商户余额不足，无法退款'];
+                    }
                     $merchant->balance = bcsub(strval($merchant->balance), strval($order->amount), 2);
                     $merchant->save();
+
+                    // 同步扣减 wallet.balance (保持与 merchant.balance 一致)
+                    $wallet = Wallet::where('user_id', $merchant->user_id)
+                        ->where('type', 1)
+                        ->lock(true)
+                        ->find();
+                    if ($wallet) {
+                        $wallet->balance = bcsub(strval($wallet->balance), strval($order->amount), 2);
+                        $wallet->save();
+
+                        // 记录退款流水
+                        $transaction = new WalletTransaction();
+                        $transaction->wallet_id = $wallet->id;
+                        $transaction->type = 2; // 退款
+                        $transaction->amount = $order->amount;
+                        $transaction->related_order = $order->order_no;
+                        $transaction->balance_after = $wallet->balance;
+                        $transaction->remark = '充值退款';
+                        $transaction->settle_status = 1;
+                        $transaction->save();
+                    }
                 }
             }
 

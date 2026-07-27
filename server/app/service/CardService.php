@@ -9,6 +9,7 @@ use app\model\Card;
 use app\model\CardBatch;
 use app\model\Device;
 use app\model\App;
+use app\model\RiskBlacklist;
 use think\facade\Cache;
 use think\facade\Db;
 
@@ -146,7 +147,8 @@ class CardService
             if ($appId && $card['app_id'] != $appId) {
                 return null;
             }
-            return new Card($card);
+            // newInstance($data, true) 让 exists=true, save() 走 UPDATE 而非 INSERT (I3)
+            return (new Card())->newInstance($card, true);
         }
 
         $query = Card::where('card_no_hash', $cardNoHash);
@@ -178,6 +180,13 @@ class CardService
                 'code' => 4101,
                 'message' => '卡密不存在',
             ];
+        }
+
+        // 轻量 DB 校验: 仅查 status, 防止缓存与 DB 不一致 (如封禁后 clearCardCache 失败) (I4)
+        $dbStatus = Card::where('id', $card->id)->value('status');
+        if ($dbStatus !== null && $dbStatus != $card->status) {
+            self::clearCardCache($cardNoHash);
+            $card->status = $dbStatus;
         }
 
         if ($card->status == Card::STATUS_BANNED) {
@@ -503,37 +512,46 @@ class CardService
 
     public static function banCard(int $cardId, string $reason = ''): array
     {
-        $card = Card::find($cardId);
-        if (!$card) {
+        Db::startTrans();
+        try {
+            $card = Card::where('id', $cardId)->lock(true)->find();
+            if (!$card) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'code' => 4101,
+                    'message' => '卡密不存在',
+                ];
+            }
+
+            if ($card->status == Card::STATUS_VOIDED) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'message' => '作废卡密无法封禁',
+                ];
+            }
+
+            $card->status = Card::STATUS_BANNED;
+            $card->ban_reason = $reason;
+            $card->save();
+
+            Device::where('card_id', $cardId)->update([
+                'is_online' => 0,
+            ]);
+
+            Db::commit();
+            self::clearCardCache($card->card_no_hash);
+
             return [
-                'success' => false,
-                'code' => 4101,
-                'message' => '卡密不存在',
+                'success' => true,
+                'code' => 0,
+                'message' => '封禁成功',
             ];
+        } catch (\Exception $e) {
+            Db::rollback();
+            throw $e;
         }
-
-        if ($card->status == Card::STATUS_VOIDED) {
-            return [
-                'success' => false,
-                'message' => '作废卡密无法封禁',
-            ];
-        }
-
-        $card->status = Card::STATUS_BANNED;
-        $card->ban_reason = $reason;
-        $card->save();
-
-        self::clearCardCache($card->card_no_hash);
-
-        Device::where('card_id', $cardId)->update([
-            'is_online' => 0,
-        ]);
-
-        return [
-            'success' => true,
-            'code' => 0,
-            'message' => '封禁成功',
-        ];
     }
 
     public static function unbanCard(int $cardId): array
@@ -574,37 +592,46 @@ class CardService
 
     public static function voidCard(int $cardId): array
     {
-        $card = Card::find($cardId);
-        if (!$card) {
+        Db::startTrans();
+        try {
+            $card = Card::where('id', $cardId)->lock(true)->find();
+            if (!$card) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'code' => 4101,
+                    'message' => '卡密不存在',
+                ];
+            }
+
+            if ($card->status == Card::STATUS_VOIDED) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'message' => '卡密已作废',
+                ];
+            }
+
+            $card->status = Card::STATUS_VOIDED;
+            $card->save();
+
+            Device::where('card_id', $cardId)->update([
+                'is_online' => 0,
+                'unbind_time' => date('Y-m-d H:i:s'),
+            ]);
+
+            Db::commit();
+            self::clearCardCache($card->card_no_hash);
+
             return [
-                'success' => false,
-                'code' => 4101,
-                'message' => '卡密不存在',
+                'success' => true,
+                'code' => 0,
+                'message' => '作废成功',
             ];
+        } catch (\Exception $e) {
+            Db::rollback();
+            throw $e;
         }
-
-        if ($card->status == Card::STATUS_VOIDED) {
-            return [
-                'success' => false,
-                'message' => '卡密已作废',
-            ];
-        }
-
-        $card->status = Card::STATUS_VOIDED;
-        $card->save();
-
-        self::clearCardCache($card->card_no_hash);
-
-        Device::where('card_id', $cardId)->update([
-            'is_online' => 0,
-            'unbind_time' => date('Y-m-d H:i:s'),
-        ]);
-
-        return [
-            'success' => true,
-            'code' => 0,
-            'message' => '作废成功',
-        ];
     }
 
     public static function checkBruteForce(int $cardId, string $ip): bool
@@ -678,6 +705,11 @@ class CardService
             Cache::set($ipKey, $ipFailCount, self::BRUTE_FORCE_IP_WINDOW);
         }
 
+        // IP 失败次数达阈值 → 加入黑名单 (C4)
+        if ($ipFailCount >= self::BRUTE_FORCE_IP_LIMIT) {
+            self::banIp($ip, '暴力破解触发IP自动封禁');
+        }
+
         $cardKey = self::BRUTE_FORCE_PREFIX . $cardId . ':' . $ip;
         try {
             $redis = Cache::store('redis')->handler();
@@ -711,6 +743,11 @@ class CardService
             Cache::set($ipKey, $ipFailCount, self::BRUTE_FORCE_IP_WINDOW);
         }
 
+        // IP 失败次数达阈值 → 加入黑名单 (C4)
+        if ($ipFailCount >= self::BRUTE_FORCE_IP_LIMIT) {
+            self::banIp($ip, '暴力破解触发IP自动封禁');
+        }
+
         $cardKey = self::BRUTE_FORCE_PREFIX . 'hash:' . $cardHash . ':' . $ip;
         try {
             $redis = Cache::store('redis')->handler();
@@ -722,6 +759,34 @@ class CardService
             $failCount = Cache::get($cardKey, 0);
             $failCount++;
             Cache::set($cardKey, $failCount, self::BRUTE_FORCE_WINDOW);
+        }
+    }
+
+    /**
+     * 将 IP 加入风控黑名单 (C4)
+     * 复用现有 ca_risk_blacklist 表 (type=1 为 IP)
+     */
+    protected static function banIp(string $ip, string $reason): void
+    {
+        try {
+            $existing = RiskBlacklist::where('type', 1)
+                ->where('value', $ip)
+                ->where(function ($q) {
+                    $q->whereNull('expire_time')
+                      ->whereOr('expire_time', '>', date('Y-m-d H:i:s'));
+                })
+                ->find();
+            if (!$existing) {
+                RiskBlacklist::create([
+                    'type'        => 1,
+                    'value'       => $ip,
+                    'reason'      => $reason,
+                    'expire_time' => date('Y-m-d H:i:s', time() + 86400), // 24h
+                    'created_at'  => date('Y-m-d H:i:s'),
+                ]);
+            }
+        } catch (\Exception $e) {
+            // 黑名单写入失败不影响主流程
         }
     }
 
@@ -876,65 +941,95 @@ class CardService
     public static function rebindDevice(string $cardNo, int $appId, string $oldDevice, string $newDevice, string $deviceName = ''): array
     {
         $cardNoHash = self::hashCardNo($cardNo);
-        $card = self::getCardByHash($cardNoHash, $appId);
 
-        if (!$card) {
-            return [
-                'success' => false,
-                'code' => 4101,
-                'message' => '卡密不存在',
-            ];
-        }
+        Db::startTrans();
+        try {
+            // Card 加行锁防并发换绑
+            $card = Card::where('card_no_hash', $cardNoHash)
+                ->where('app_id', $appId)
+                ->lock(true)
+                ->find();
 
-        if ($card->status != Card::STATUS_ACTIVATED) {
-            return [
-                'success' => false,
-                'code' => 4102,
-                'message' => '卡密未激活',
-            ];
-        }
+            if (!$card) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'code' => 4101,
+                    'message' => '卡密不存在',
+                ];
+            }
 
-        $oldDev = Device::where('card_id', $card->id)
-            ->where('device_fingerprint', $oldDevice)
-            ->find();
+            if ($card->status != Card::STATUS_ACTIVATED) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'code' => 4102,
+                    'message' => '卡密未激活',
+                ];
+            }
 
-        if (!$oldDev) {
-            return [
-                'success' => false,
-                'message' => '旧设备不存在',
-            ];
-        }
+            // 旧设备加行锁
+            $oldDev = Device::where('card_id', $card->id)
+                ->where('device_fingerprint', $oldDevice)
+                ->lock(true)
+                ->find();
 
-        $newDevExists = Device::where('card_id', $card->id)
-            ->where('device_fingerprint', $newDevice)
-            ->find();
+            if (!$oldDev) {
+                Db::rollback();
+                return [
+                    'success' => false,
+                    'message' => '旧设备不存在',
+                ];
+            }
 
-        if ($newDevExists) {
+            // 新设备是否已存在 (加锁避免并发新建)
+            $newDevExists = Device::where('card_id', $card->id)
+                ->where('device_fingerprint', $newDevice)
+                ->lock(true)
+                ->find();
+
+            if ($newDevExists) {
+                Db::rollback();
+                return [
+                    'success' => true,
+                    'code' => 0,
+                    'message' => '新设备已绑定',
+                    'data' => [
+                        'device_id' => $newDevExists->id,
+                    ],
+                ];
+            }
+
+            // 旧设备软删 (保留审计链, 不再原地改指纹)
+            $now = date('Y-m-d H:i:s');
+            $oldDev->is_online = 0;
+            $oldDev->unbind_time = $now;
+            $oldDev->save();
+
+            // 新建设备记录 (审计链完整)
+            $newDev = new Device();
+            $newDev->card_id = $card->id;
+            $newDev->device_fingerprint = $newDevice;
+            $newDev->device_name = $deviceName ?: $oldDev->device_name;
+            $newDev->bind_time = $now;
+            $newDev->last_heartbeat = $now;
+            $newDev->is_online = 1;
+            $newDev->save();
+
+            Db::commit();
+            self::clearCardCache($cardNoHash);
+
             return [
                 'success' => true,
                 'code' => 0,
-                'message' => '新设备已绑定',
+                'message' => '换绑成功',
                 'data' => [
-                    'device_id' => $newDevExists->id,
+                    'device_id' => $newDev->id,
                 ],
             ];
+        } catch (\Exception $e) {
+            Db::rollback();
+            throw $e;
         }
-
-        $oldDev->device_fingerprint = $newDevice;
-        $oldDev->device_name = $deviceName ?: $oldDev->device_name;
-        $oldDev->last_heartbeat = date('Y-m-d H:i:s');
-        $oldDev->is_online = 1;
-        $oldDev->save();
-
-        self::clearCardCache($cardNoHash);
-
-        return [
-            'success' => true,
-            'code' => 0,
-            'message' => '换绑成功',
-            'data' => [
-                'device_id' => $oldDev->id,
-            ],
-        ];
     }
 }
