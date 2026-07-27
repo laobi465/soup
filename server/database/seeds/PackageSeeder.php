@@ -79,6 +79,12 @@ class PackageSeeder extends Seeder
             ],
         ];
 
-        $this->table('ca_packages')->insert($packages)->save();
+        // 幂等: 已存在则更新, 否则插入 (与 UserSeeder 一致, 避免重复执行报 Duplicate entry)
+        // onConflict 需要 Phinx >= 0.13, think-migration v3 已支持
+        $this->table('ca_packages')
+            ->insert($packages)
+            ->onConflict(['id'])
+            ->replace()
+            ->save();
     }
 }

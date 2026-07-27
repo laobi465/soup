@@ -401,6 +401,11 @@ class AdminMenuSeeder extends Seeder
             ],
         ];
 
-        $this->table('ca_admin_menus')->insert($menus)->save();
+        // 幂等: 按 id upsert (与 UserSeeder 一致, 避免重复执行报 Duplicate entry)
+        $this->table('ca_admin_menus')
+            ->insert($menus)
+            ->onConflict(['id'])
+            ->replace()
+            ->save();
     }
 }

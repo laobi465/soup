@@ -528,6 +528,12 @@ class SystemConfigSeeder extends Seeder
             ],
         ];
 
-        $this->table('ca_system_configs')->insert($configs)->save();
+        // 幂等: 按 config_key 唯一索引 upsert (ca_system_configs.uk_config_key)
+        // 重复执行不会报 Duplicate entry, 已有配置会被更新为最新值
+        $this->table('ca_system_configs')
+            ->insert($configs)
+            ->onConflict(['config_key'])
+            ->replace()
+            ->save();
     }
 }
