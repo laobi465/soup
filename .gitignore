@@ -45,9 +45,20 @@ deploy/keystore/
 *.jks
 *.p12
 *.pfx
+# keystore 密码文件 (防御性, 即使移到其他位置也不入库)
+*.keystore-password.txt
+.keystore-password.txt
 
 # SSL 证书（deploy.sh 自动生成自签证书，不入库）
 docker/nginx/ssl/
+# 其他常见证书格式 (Let's Encrypt 等)
+*.pem
+*.crt
+*.key
+
+# 数据库备份 (deploy.sh backup 可能输出到仓库内)
+*.sql
+*.sql.gz
 
 # Test coverage
 coverage/

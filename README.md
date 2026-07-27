@@ -227,9 +227,11 @@ docker compose exec php-fpm php think seed:run
 服务地址：
 - 后端 API：http://localhost:8000
 - 管理后台：http://localhost:8080
-- MySQL：localhost:3306
-- Redis：localhost:6379
+- MySQL：127.0.0.1:3306（仅本机可访问，远程请用 SSH 隧道）
+- Redis：127.0.0.1:6379（仅本机可访问，远程请用 SSH 隧道）
 - MinIO 控制台：http://localhost:9001
+
+> 注：若服务器已有 Redis/MySQL 占用 6379/3306，`deploy.sh` 会自动生成 `docker-compose.override.yml` 移除宿主机端口映射，此时从宿主机无法直连，但容器间通信不受影响。
 
 ### 前端开发模式
 
@@ -356,13 +358,21 @@ docker compose -f docker-compose.prod.yml up -d
 # 方式 1：使用一键脚本（推荐，自动从 .env 读取密码）
 ./deploy.sh backup
 
-# 方式 2：手动备份
-bash scripts/backup.sh
+# 方式 2：手动备份（需在 mysql 容器内执行，或导出密码后宿主机执行）
+# scripts/backup.sh 中 MYSQL_HOST=mysql 是容器内主机名, 宿主机无法解析
+docker compose exec -e MYSQL_ROOT_PASSWORD=$(grep ^MYSQL_ROOT_PASSWORD= .env | cut -d= -f2) \
+    mysql bash /workspace/scripts/backup.sh
+
+# 或从 .env 读取密码后在宿主机直连（需 3306 端口已映射）
+export MYSQL_ROOT_PASSWORD=$(grep ^MYSQL_ROOT_PASSWORD= .env | cut -d= -f2)
+MYSQL_HOST=127.0.0.1 bash scripts/backup.sh   # 需修改脚本中 MYSQL_HOST
 
 # 添加定时任务（每日凌晨 3 点）
 crontab -e
 0 3 * * * /workspace/deploy.sh backup
 ```
+
+> 注：`scripts/backup.sh` 不再提供 `root123456` 默认密码兜底，必须显式设置 `MYSQL_ROOT_PASSWORD` 环境变量。
 
 ### 宝塔面板部署
 
@@ -370,7 +380,7 @@ crontab -e
 
 ## 数据库表结构
 
-共 26 张数据表（前缀 `ca_`）：
+共 24 张数据表（前缀 `ca_`）：
 
 | 表名 | 说明 |
 |------|------|
@@ -397,6 +407,7 @@ crontab -e
 | ca_system_configs | 系统配置表 |
 | ca_messages | 站内消息表 |
 | ca_sub_roles | 子账号角色表 |
+| ca_apk_inject_tasks | APK 云端注入任务表 |
 
 ## 开发规范
 

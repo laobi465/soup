@@ -25,6 +25,8 @@ ASSUME_YES=false
 FORCE=false
 DOMAIN=""
 BRANCH=""
+# 端口映射变化时由 handle_port_conflicts 设置为 true, start_services 据此追加 --force-recreate
+FORCE_RECREATE=false
 
 # 端口配置
 DEV_PORTS=(8000 8080 3306 6379 9000 9001 8081)
@@ -67,15 +69,21 @@ detect_compose() {
     fi
 }
 
-# 获取 compose 命令前缀 (含 prod 文件参数)
+# 获取 compose 命令前缀 (含 prod 文件参数 + override 文件)
+# 注意: compose v2 在使用多个 -f 时不会自动加载 docker-compose.override.yml,
+# 必须显式 -f 指定, 否则 handle_port_conflicts 生成的 override 在 prod 模式下被忽略
 get_compose_cmd() {
     local base
     base="$(detect_compose)" || die "未检测到 Docker Compose, 请先安装 (https://docs.docker.com/compose/install/)"
+    local files="-f docker-compose.yml"
     if $PROD_MODE; then
-        echo "$base -f docker-compose.yml -f docker-compose.prod.yml"
-    else
-        echo "$base -f docker-compose.yml"
+        files="$files -f docker-compose.prod.yml"
     fi
+    if [[ -f docker-compose.override.yml ]]; then
+        files="$files -f docker-compose.override.yml"
+        log_info "已加载 docker-compose.override.yml"
+    fi
+    echo "$base $files"
 }
 
 # 检查当前用户是否有 docker 权限
@@ -96,9 +104,17 @@ ensure_root_or_docker_group() {
 }
 
 # 生成随机十六进制 (长度 = $1 字节, 输出 2*$1 字符)
+# 优先用 openssl, 不可用时回退到 /dev/urandom
 random_hex() {
     local len="${1:-16}"
-    openssl rand -hex "$len"
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex "$len"
+    elif [[ -r /dev/urandom ]]; then
+        # 回退: 从 /dev/urandom 读取 len 字节, 转为 hex (2*len 字符)
+        head -c "$len" /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c $((len*2))
+    else
+        die "无法生成随机数: openssl 与 /dev/urandom 均不可用"
+    fi
 }
 
 # 检查端口是否被占用, 返回 0=空闲 1=占用
@@ -117,11 +133,15 @@ port_free() {
 }
 
 # 从 .env 读取指定键的值
+# 返回 0=成功(输出值), 1=失败(文件不存在/键不存在/值为空)
 env_get() {
     local key="$1"
     local file="${2:-.env}"
     [[ -f "$file" ]] || return 1
-    grep -E "^${key}=" "$file" 2>/dev/null | tail -n1 | cut -d'=' -f2- | tr -d '"' || true
+    local val
+    val=$(grep -E "^${key}=" "$file" 2>/dev/null | tail -n1 | cut -d'=' -f2- | tr -d '"') || return 1
+    [[ -n "$val" ]] || return 1
+    printf '%s' "$val"
 }
 
 # ==================== 参数解析 ====================
@@ -231,11 +251,7 @@ cmd_doctor() {
     # 5. 磁盘空间检查 (≥ 5GB)
     log_step "5. 检查磁盘空间"
     local avail_kb
-    if [[ "$(uname)" == "Darwin" ]]; then
-        avail_kb=$(df -k "$SCRIPT_DIR" | awk 'NR==2 {print $4}')
-    else
-        avail_kb=$(df -k "$SCRIPT_DIR" | awk 'NR==2 {print $4}')
-    fi
+    avail_kb=$(df -k "$SCRIPT_DIR" | awk 'NR==2 {print $4}')
     local avail_gb=$((avail_kb / 1024 / 1024))
     if [[ "$avail_gb" -ge 5 ]]; then
         log_info "可用磁盘空间: ${avail_gb}GB ✓"
@@ -244,9 +260,18 @@ cmd_doctor() {
         has_error=true
     fi
 
-    # 6. gVisor 检查 (仅 --prod)
+    # 6. openssl 检查 (用于生成随机密钥)
+    log_step "6. 检查 openssl"
+    if command -v openssl >/dev/null 2>&1; then
+        log_info "openssl: $(openssl version 2>/dev/null || echo '已安装') ✓"
+    else
+        log_warn "openssl 未安装 (将回退到 /dev/urandom 生成随机数)"
+        log_warn "建议安装: apt-get install -y openssl 或 yum install -y openssl"
+    fi
+
+    # 7. gVisor 检查 (仅 --prod)
     if $PROD_MODE; then
-        log_step "6. 检查 gVisor (runsc)"
+        log_step "7. 检查 gVisor (runsc)"
         if docker info 2>/dev/null | grep -qi "runsc"; then
             log_info "gVisor (runsc) 已安装 ✓"
         else
@@ -255,8 +280,8 @@ cmd_doctor() {
         fi
     fi
 
-    # 7. Android 工具检查 (仅提示)
-    log_step "7. 检查 Android 工具 (APK 注入功能, 可选)"
+    # 8. Android 工具检查 (仅提示)
+    log_step "8. 检查 Android 工具 (APK 注入功能, 可选)"
     local android_tools_ok=true
     for tool in zipalign apksigner aapt2; do
         if command -v "$tool" >/dev/null 2>&1; then
@@ -335,7 +360,7 @@ generate_server_env() {
 
     local app_secret jwt_secret app_debug
     app_secret=$(random_hex 24)
-    jwt_secret=$(random_hex 16)
+    jwt_secret=$(random_hex 32)
     if $PROD_MODE; then
         app_debug="false"
     else
@@ -399,7 +424,6 @@ generate_keystore() {
     log_step "生成 APK 签名 keystore"
     local keystore_dir="deploy/keystore"
     local keystore_file="${keystore_dir}/platform.keystore"
-    local password_file="${keystore_dir}/.keystore-password.txt"
 
     if [[ -f "$keystore_file" ]]; then
         log_info "keystore 已存在, 跳过"
@@ -440,10 +464,20 @@ generate_keystore() {
                 -dname "$dname"
     fi
 
-    # 密码单独存档 (已 gitignore), 便于后续运维查阅
-    echo "$keystore_pwd" > "$password_file"
-    chmod 600 "$password_file"
-    log_info "已生成 $keystore_file (密码存 $password_file, 权限 600)"
+    # 修复属主: docker run 以 root 运行, 生成的文件属主为 root, 需 chown 回当前用户
+    local cur_uid cur_gid
+    cur_uid=$(id -u)
+    cur_gid=$(id -g)
+    if [[ $EUID -ne 0 ]]; then
+        sudo chown "$cur_uid:$cur_gid" "$keystore_file" 2>/dev/null || true
+    else
+        chown "$cur_uid:$cur_gid" "$keystore_file" 2>/dev/null || true
+    fi
+    chmod 600 "$keystore_file"
+
+    # 不再单独存档密码 (已在 .env 中, 避免重复存储扩大泄露面)
+    log_info "已生成 $keystore_file (权限 600)"
+    log_info "keystore 密码请查阅 .env 的 APK_KEYSTORE_PASSWORD"
 }
 
 build_frontend() {
@@ -465,6 +499,15 @@ build_frontend() {
             -w /app \
             node:20-alpine \
             sh -c "npm ci && npm run build"
+    fi
+
+    # 修复属主: docker run 以 root 运行, 生成的 node_modules/dist 属主为 root
+    # 非 root 用户后续无法删除, 需 chown 回当前用户
+    if [[ $EUID -ne 0 ]]; then
+        local cur_uid cur_gid
+        cur_uid=$(id -u)
+        cur_gid=$(id -g)
+        sudo chown -R "$cur_uid:$cur_gid" "${SCRIPT_DIR}/admin/dist" "${SCRIPT_DIR}/admin/node_modules" 2>/dev/null || true
     fi
 
     [[ -f "$dist_file" ]] || die "前端构建失败: $dist_file 不存在"
@@ -499,6 +542,31 @@ cmd_init() {
     log_step "初始化配置开始 (mode=$($PROD_MODE && echo prod || echo dev))"
 
     ensure_root_or_docker_group || true
+
+    # 检测模式切换: 若已有 server/.env 且 APP_DEBUG 与目标模式不一致, 提示风险
+    # --force 会重新生成所有密钥, MySQL/MinIO 数据卷将无法用新密码访问
+    if [[ -f server/.env ]]; then
+        local current_debug
+        current_debug=$(env_get APP_DEBUG server/.env 2>/dev/null) || current_debug=""
+        if [[ -n "$current_debug" ]]; then
+            local target_debug="true"
+            $PROD_MODE && target_debug="false"
+            if [[ "$current_debug" != "$target_debug" ]]; then
+                log_warn "检测到模式切换 (APP_DEBUG: $current_debug → $target_debug)"
+                if $FORCE; then
+                    log_warn "若用 --force 重新生成密钥, MySQL/MinIO 数据卷将无法用新密码访问"
+                    log_warn "建议先执行: ./deploy.sh reset --yes 清理数据卷后再 init"
+                    $ASSUME_YES || {
+                        read -r -p "确认继续 --force 重新生成? [y/N] " ans
+                        [[ "$ans" =~ ^[Yy]$ ]] || exit 0
+                    }
+                else
+                    log_warn "未加 --force, 将保留现有配置不重新生成 (server/.env 跳过)"
+                    log_warn "如需完整切换, 请先: ./deploy.sh reset --yes"
+                fi
+            fi
+        fi
+    fi
 
     generate_root_env
     generate_server_env
@@ -543,10 +611,17 @@ install_php_deps() {
     local compose_cmd
     compose_cmd="$(get_compose_cmd)"
 
-    # 检测 vendor 是否存在
-    if $compose_cmd exec -T php-fpm sh -c "test -d /var/www/server/vendor" 2>/dev/null; then
-        log_info "vendor 已存在, 跳过"
+    # 检测 vendor 完整性: 目录存在 + autoload.php + installed.json 同时存在
+    # 仅检测目录存在无法发现半成品 vendor (composer install 失败后残留)
+    if $compose_cmd exec -T php-fpm sh -c "test -f /var/www/server/vendor/autoload.php && test -f /var/www/server/vendor/composer/installed.json" 2>/dev/null; then
+        log_info "vendor 完整, 跳过"
         return 0
+    fi
+
+    # 清理残缺 vendor (目录存在但不完整)
+    if $compose_cmd exec -T php-fpm sh -c "test -d /var/www/server/vendor" 2>/dev/null; then
+        log_warn "vendor 残缺 (缺 autoload.php 或 installed.json), 清理后重装"
+        $compose_cmd exec -T --user root php-fpm sh -c "rm -rf /var/www/server/vendor /var/www/server/composer.lock"
     fi
 
     # 用 --user root 执行 composer: 挂载目录属主为宿主机 root,
@@ -584,28 +659,70 @@ run_migrations() {
 }
 
 run_seeds() {
-    log_step "执行数据填充 (首次)"
+    log_step "执行数据填充 (按需)"
     local compose_cmd
     compose_cmd="$(get_compose_cmd)"
 
-    # 检测 admin 用户是否已存在 (ca_users 表), 已存在则跳过 seed
     local mysql_pwd
     mysql_pwd="$(env_get MYSQL_ROOT_PASSWORD .env)" || die "无法读取 .env 的 MYSQL_ROOT_PASSWORD"
-    local admin_exists
-    admin_exists=$($compose_cmd exec -T mysql mysql -uroot -p"${mysql_pwd}" card_auth \
-        -N -B -e "SELECT COUNT(*) FROM ca_users WHERE username='admin'" 2>/dev/null || echo "0")
 
-    if [[ "$admin_exists" -gt 0 ]]; then
-        log_info "admin 用户已存在, 跳过 seed"
-        return 0
-    fi
+    # 辅助函数: 查询表记录数 (失败返回 0, 不中断)
+    _count_rows() {
+        local table="$1"
+        local count
+        count=$($compose_cmd exec -T mysql mysql -uroot -p"${mysql_pwd}" card_auth \
+            -N -B -e "SELECT COUNT(*) FROM ${table}" 2>/dev/null) || { echo "0"; return; }
+        echo "${count:-0}"
+    }
 
-    # UserSeeder 非幂等, 用 try-catch 防止重复执行报错; 用 root 执行避免权限问题
-    $compose_cmd exec -T --user root php-fpm sh -c "cd /var/www/server && php think seed:run" || {
-        log_warn "seed:run 报错 (可能已部分执行), 检查 admin 用户是否已存在"
+    # 辅助函数: 执行单个 seeder (失败仅 warn, 不中断)
+    _run_seeder() {
+        local seeder="$1"
+        $compose_cmd exec -T --user root php-fpm sh -c "cd /var/www/server && php think seed:run -s ${seeder}" || {
+            log_warn "${seeder} 执行失败"
+            return 1
+        }
+        log_info "${seeder} 完成 ✓"
         return 0
     }
-    log_info "数据填充完成 ✓"
+
+    # UserSeeder: 检测 admin 用户 (幂等, 可重复执行)
+    local admin_count
+    admin_count=$(_count_rows "ca_users WHERE username='admin'")
+    if [[ "$admin_count" -eq 0 ]]; then
+        _run_seeder "UserSeeder"
+    else
+        log_info "admin 用户已存在, 跳过 UserSeeder"
+    fi
+
+    # PackageSeeder: 检测 ca_packages 是否为空
+    local pkg_count
+    pkg_count=$(_count_rows "ca_packages")
+    if [[ "$pkg_count" -eq 0 ]]; then
+        _run_seeder "PackageSeeder"
+    else
+        log_info "ca_packages 已有数据, 跳过 PackageSeeder"
+    fi
+
+    # SystemConfigSeeder: 检测 ca_system_configs 是否为空
+    local cfg_count
+    cfg_count=$(_count_rows "ca_system_configs")
+    if [[ "$cfg_count" -eq 0 ]]; then
+        _run_seeder "SystemConfigSeeder"
+    else
+        log_info "ca_system_configs 已有数据, 跳过 SystemConfigSeeder"
+    fi
+
+    # AdminMenuSeeder: 检测 ca_admin_menus 是否为空
+    local menu_count
+    menu_count=$(_count_rows "ca_admin_menus")
+    if [[ "$menu_count" -eq 0 ]]; then
+        _run_seeder "AdminMenuSeeder"
+    else
+        log_info "ca_admin_menus 已有数据, 跳过 AdminMenuSeeder"
+    fi
+
+    log_info "数据填充检查完成 ✓"
 }
 
 start_services() {
@@ -621,7 +738,14 @@ start_services() {
         # 生产环境额外启动通用定时任务调度器 (非 APK 专用)
         services="$services scheduler"
     fi
-    $compose_cmd up -d $services
+
+    # 若端口映射变化 (override 新生成/更新), 强制重建容器以应用新配置
+    local recreate_flag=""
+    if [[ "$FORCE_RECREATE" == "true" ]]; then
+        recreate_flag="--force-recreate"
+        log_info "检测到端口映射变化, 强制重建容器"
+    fi
+    $compose_cmd up -d $recreate_flag $services
     log_info "核心服务已启动 ✓"
 }
 
@@ -684,6 +808,10 @@ handle_port_conflicts() {
     } > "$override_file"
     log_info "已生成 $override_file"
     log_warn "如需从宿主机直接访问 ${conflict_services[*]}, 请先释放端口或修改 docker-compose.yml"
+
+    # 标记需要强制重建容器, 使新 override 的端口映射立即生效
+    # (否则 compose 检测配置无变化不会重建, 运行中容器仍持有旧端口映射)
+    FORCE_RECREATE=true
 }
 
 health_check() {
@@ -725,8 +853,17 @@ health_check() {
 
 print_access_info() {
     log_step "部署完成 - 访问信息"
-    local host
-    host="${DOMAIN:-$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost)}"
+    local host="${DOMAIN}"
+    if [[ -z "$host" ]]; then
+        if [[ "$(uname)" == "Darwin" ]]; then
+            # macOS: hostname -I 不支持, 用 ipconfig getifaddr
+            host=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "localhost")
+        else
+            # Linux: hostname -I 输出所有 IP, 取第一个
+            host=$(hostname -I 2>/dev/null | awk '{print $1}')
+            host="${host:-localhost}"
+        fi
+    fi
 
     echo ""
     echo "========================================"
@@ -755,6 +892,9 @@ cmd_up() {
     log_step "启动服务 (mode=$($PROD_MODE && echo prod || echo dev))"
 
     ensure_root_or_docker_group || true
+
+    # 重置标志, 由 handle_port_conflicts 根据实际情况设置
+    FORCE_RECREATE=false
 
     # 配置必须先初始化
     if [[ ! -f .env ]] || [[ ! -f server/.env ]]; then
@@ -789,7 +929,13 @@ cmd_down() {
     local compose_cmd
     compose_cmd="$(get_compose_cmd)"
 
-    if [[ "${EXTRA_ARGS[0]:-}" == "--volumes" ]] || [[ "${EXTRA_ARGS[1]:-}" == "--volumes" ]]; then
+    # 用循环遍历所有参数, 不限于前两个位置 (支持 --yes down --volumes 等顺序)
+    local has_volumes=false
+    for arg in "${EXTRA_ARGS[@]:-}"; do
+        [[ "$arg" == "--volumes" ]] && has_volumes=true
+    done
+
+    if $has_volumes; then
         if ! $ASSUME_YES; then
             die "删除数据卷是危险操作, 请加 --yes 确认: ./deploy.sh down --volumes --yes"
         fi
@@ -808,15 +954,15 @@ cmd_status() {
     $compose_cmd ps
 
     echo ""
-    log_info "端口连通性:"
+    log_info "宿主机端口连通性 (若启用了端口冲突 override, mysql/redis 可能不监听宿主机):"
     local services=("mysql:3306" "redis:6379" "minio:9000")
     for svc in "${services[@]}"; do
         local name="${svc%%:*}"
         local port="${svc##*:}"
         if port_free "$port"; then
-            log_warn "$name (端口 $port) 未监听"
+            log_warn "$name (宿主机端口 $port) 未监听 (可能被 override 移除或服务未启动)"
         else
-            log_info "$name (端口 $port) 正常 ✓"
+            log_info "$name (宿主机端口 $port) 正常 ✓"
         fi
     done
 }
@@ -843,7 +989,7 @@ cmd_backup() {
     local mysql_pwd
     mysql_pwd="$(env_get MYSQL_ROOT_PASSWORD .env)" || die "无法读取 .env 的 MYSQL_ROOT_PASSWORD"
 
-    mkdir -p "$backup_dir"
+    mkdir -p "$backup_dir" && chmod 700 "$backup_dir"
     local date_str db_file
     date_str=$(date +%Y%m%d_%H%M%S)
     db_file="${backup_dir}/card_auth_${date_str}.sql"
@@ -997,17 +1143,23 @@ cmd_install_gvisor() {
         return 0
     fi
 
-    # 需要 sudo
-    if [[ $EUID -ne 0 ]]; then
-        if ! $ASSUME_YES; then
+    # 警告: 安装会重启 Docker daemon, 中断所有运行中容器
+    log_warn "安装将重启 Docker daemon, 所有运行中容器会被中断"
+    if ! $ASSUME_YES; then
+        if [[ $EUID -ne 0 ]]; then
             log_warn "安装 gVisor 需要 root 权限, 将使用 sudo"
         fi
+        read -r -p "确认继续? [y/N] " ans
+        [[ "$ans" =~ ^[Yy]$ ]] || { log_info "已取消"; exit 0; }
     fi
 
     # 添加 gVisor apt 仓库
+    # set -euo pipefail: curl/gpg 失败时中断, 避免 apt-get install 未签名包
+    # gpg --dearmor --yes: 避免已存在文件时交互式确认
     log_info "添加 gVisor 仓库..."
     sudo bash -c '
-        curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+        set -euo pipefail
+        curl -fsSL https://gvisor.dev/archive.key | gpg --dearmor --yes -o /usr/share/keyrings/gvisor-archive-keyring.gpg
         echo "deb [arch=amd64 signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" > /etc/apt/sources.list.d/gvisor.list
         apt-get update
         apt-get install -y runsc

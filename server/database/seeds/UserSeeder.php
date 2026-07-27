@@ -27,6 +27,12 @@ class UserSeeder extends Seeder
             ],
         ];
 
-        $this->table('ca_users')->insert($users)->save();
+        // 幂等: 已存在则更新 password_hash/updated_at, 否则插入
+        // onConflict 需要 Phinx >= 0.13, think-migration v3 已支持
+        $this->table('ca_users')
+            ->insert($users)
+            ->onConflict(['id'])
+            ->replace()
+            ->save();
     }
 }

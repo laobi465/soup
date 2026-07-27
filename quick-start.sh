@@ -203,20 +203,21 @@ main() {
     install_docker
     clone_repo
 
-    # 执行 deploy.sh
+    # 执行 deploy.sh (不传 -E: deploy.sh 所有配置自行生成, 不需要外部环境变量,
+    # 避免 -E 将调用方的 HOME/PATH/token 等泄露给 root 子进程)
     log_step "执行 deploy.sh init"
     chmod +x deploy.sh
     if [[ $EUID -eq 0 ]]; then
         ./deploy.sh init "${EXTRA_DEPLOY_ARGS[@]}"
     else
-        sudo -E ./deploy.sh init "${EXTRA_DEPLOY_ARGS[@]}"
+        sudo ./deploy.sh init "${EXTRA_DEPLOY_ARGS[@]}"
     fi
 
     log_step "执行 deploy.sh up"
     if [[ $EUID -eq 0 ]]; then
         ./deploy.sh up "${EXTRA_DEPLOY_ARGS[@]}"
     else
-        sudo -E ./deploy.sh up "${EXTRA_DEPLOY_ARGS[@]}"
+        sudo ./deploy.sh up "${EXTRA_DEPLOY_ARGS[@]}"
     fi
 
     log_step "部署流程完成"
