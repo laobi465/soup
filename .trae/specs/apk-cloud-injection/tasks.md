@@ -172,7 +172,7 @@
   - `programmatic` TR-8.4: health 接口可访问
 - **Notes**: gVisor 需宿主机安装 runsc
 
-## [ ] Task 9: 集成测试与验证
+## [x] Task 9: 集成测试与验证
 - **Priority**: high
 - **Depends On**: Task 4, Task 5, Task 6, Task 7, Task 8
 - **Description**:
