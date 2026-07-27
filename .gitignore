@@ -28,6 +28,9 @@ build/
 .env.local
 .env.*.local
 
+# Docker Compose override (deploy.sh 自动生成用于解决端口冲突)
+docker-compose.override.yml
+
 # Runtime
 server/runtime/
 server/public/uploads/

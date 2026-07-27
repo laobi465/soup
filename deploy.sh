@@ -617,6 +617,67 @@ start_services() {
     log_info "核心服务已启动 ✓"
 }
 
+# 检测端口冲突: 若宿主机 3306/6379 被非本平台容器占用, 自动生成
+# docker-compose.override.yml 移除对应服务的宿主机端口映射
+# (容器间通过 docker 网络通信不受影响, 仅移除 127.0.0.1:port 映射)
+handle_port_conflicts() {
+    log_step "检查端口冲突"
+    local override_file="docker-compose.override.yml"
+
+    # 服务名:端口 映射表 (仅检查有宿主机端口映射的服务)
+    # nginx (8000/8080/80/443) 与 MinIO (9000/9001) 不在此处理:
+    #   - nginx 端口是必须的对外服务端口, 冲突时应让用户决策
+    #   - MinIO 控制台端口通常不冲突
+    local check_items=("redis:6379" "mysql:3306")
+    local conflict_services=()
+    local need_override=false
+
+    for item in "${check_items[@]}"; do
+        local svc="${item%%:*}"
+        local port="${item##*:}"
+        if port_free "$port"; then
+            log_info "$svc (端口 $port) 空闲 ✓"
+            continue
+        fi
+        # 端口被占用, 判断是否为本平台容器
+        local our_container
+        case "$svc" in
+            redis)  our_container="card-auth-redis" ;;
+            mysql)  our_container="card-auth-mysql" ;;
+            *)      our_container="" ;;
+        esac
+        if [[ -n "$our_container" ]] && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${our_container}$"; then
+            log_info "$svc (端口 $port) 已被本平台容器占用 ✓"
+            continue
+        fi
+        # 被外部进程占用
+        log_warn "$svc 端口 $port 被外部进程占用"
+        conflict_services+=("$svc")
+        need_override=true
+    done
+
+    if ! $need_override; then
+        log_info "无端口冲突 ✓"
+        # 若之前生成过 override 但现在已无冲突, 不自动删除 (用户可能有意保留)
+        return 0
+    fi
+
+    # 生成 override 文件移除冲突服务的端口映射
+    log_warn "将为以下服务移除宿主机端口映射 (容器间通信不受影响): ${conflict_services[*]}"
+    {
+        echo "# 自动生成于 $(date '+%Y-%m-%d %H:%M:%S') by deploy.sh (handle_port_conflicts)"
+        echo "# 移除被外部占用的宿主机端口映射, 容器间通过 docker 网络通信不受影响"
+        echo "# 如需恢复宿主机端口映射, 删除本文件后释放对应端口再执行 ./deploy.sh up"
+        echo "services:"
+        for svc in "${conflict_services[@]}"; do
+            echo "  ${svc}:"
+            echo "    ports: []"
+        done
+    } > "$override_file"
+    log_info "已生成 $override_file"
+    log_warn "如需从宿主机直接访问 ${conflict_services[*]}, 请先释放端口或修改 docker-compose.yml"
+}
+
 health_check() {
     log_step "健康检查"
     local be_url fe_url
@@ -700,6 +761,9 @@ cmd_up() {
             log_warn "核心平台服务不依赖 gVisor, 继续启动..."
         fi
     fi
+
+    # 端口冲突检测: 自动生成 override 文件移除被占用服务的宿主机端口映射
+    handle_port_conflicts
 
     start_services
     wait_mysql
