@@ -109,7 +109,7 @@
 - [x] CP-9.5: 前端 `npm run build` 成功（built in 1.70s，exit 0）
 - [~] CP-9.6: Java `mvn compile` 受沙箱网络限制无法拉取 Spring Boot parent POM；ApkParser.java 改动经人工审查语法正确（仅新增常量与 if 检查，无新依赖）
 - [x] CP-9.7: 本 checklist 所有代码级检查点通过；运行时验证项（CP-1.10/CP-7.5）与 MVP deferred 项（CP-5.2/CP-8.9/CP-8.10/CP-9.6）已标注
-- [ ] CP-9.8: 代码已提交并推送到 GitHub main
+- [x] CP-9.8: 代码已提交并推送到 GitHub main（commit 9fa9d5a，d8c87a3..9fa9d5a）
 
 ## 原评审问题覆盖核对
 - [x] C1 并发竞态 → Task 1 (CP-1.1 ~ CP-1.9 已验证；CP-1.10 待运行时并发测试)
