@@ -119,17 +119,19 @@ random_hex() {
 }
 
 # 检查端口是否被占用, 返回 0=空闲 1=占用
+# 用 awk 精确匹配 ss 第4列 (Local Address:Port) 末尾, 避免 :3306 误匹配 :33060
+# 同时支持 IPv4 (0.0.0.0:3306) 和 IPv6 ([::]:3306 / :::3306) 监听
 port_free() {
     local port="$1"
     if command -v ss >/dev/null 2>&1; then
-        ss -tlnp 2>/dev/null | grep -q ":${port} " && return 1 || return 0
+        ss -tlnH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${port}\$" && return 1 || return 0
     elif command -v lsof >/dev/null 2>&1; then
         lsof -iTCP:"${port}" -sTCP:LISTEN -P -n >/dev/null 2>&1 && return 1 || return 0
     else
-        # 兜底用 /proc/net/tcp (Linux)
+        # 兜底用 /proc/net/tcp 和 tcp6 (Linux)
         local hex_port
         hex_port=$(printf "%04X" "${port}")
-        grep -q ":${hex_port} " /proc/net/tcp 2>/dev/null && return 1 || return 0
+        grep -q ":${hex_port} " /proc/net/tcp /proc/net/tcp6 2>/dev/null && return 1 || return 0
     fi
 }
 
@@ -772,19 +774,29 @@ handle_port_conflicts() {
             log_info "$svc (端口 $port) 空闲 ✓"
             continue
         fi
-        # 端口被占用, 判断是否为本平台容器
+        # 端口被占用, 判断是否为本平台容器且健康运行
+        # (排除 Restarting/异常退出状态: 此时端口实际未绑定, 可能被外部进程抢占)
         local our_container
         case "$svc" in
             redis)  our_container="card-auth-redis" ;;
             mysql)  our_container="card-auth-mysql" ;;
             *)      our_container="" ;;
         esac
-        if [[ -n "$our_container" ]] && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${our_container}$"; then
-            log_info "$svc (端口 $port) 已被本平台容器占用 ✓"
-            continue
+        if [[ -n "$our_container" ]]; then
+            local container_status
+            container_status=$(docker inspect --format '{{.State.Status}}' "$our_container" 2>/dev/null || echo "")
+            if [[ "$container_status" == "running" ]]; then
+                # 进一步验证容器确实绑定了该端口 (避免容器 running 但端口绑定失败的边缘情况)
+                local port_bound
+                port_bound=$(docker port "$our_container" 2>/dev/null | grep -q ":${port}" && echo "yes" || echo "no")
+                if [[ "$port_bound" == "yes" ]]; then
+                    log_info "$svc (端口 $port) 已被本平台容器健康占用 ✓"
+                    continue
+                fi
+            fi
         fi
-        # 被外部进程占用
-        log_warn "$svc 端口 $port 被外部进程占用"
+        # 被外部进程占用 (或本平台容器非 running 状态)
+        log_warn "$svc 端口 $port 被外部进程占用 (或本平台容器未健康运行)"
         conflict_services+=("$svc")
         need_override=true
     done
