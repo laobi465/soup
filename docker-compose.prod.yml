@@ -1,3 +1,10 @@
+# YAML anchor: 统一日志 rotation 配置（C7/I1）
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   nginx:
     image: nginx:1.25-alpine
@@ -12,7 +19,8 @@ services:
       - ./admin/dist:/var/www/admin
       - nginx-logs:/var/log/nginx
     depends_on:
-      - php-fpm
+      php-fpm:
+        condition: service_healthy
     networks:
       - card-auth-network
     restart: always
@@ -20,6 +28,11 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+      # M13: 补 nproc，避免 worker 启动受限
+      nproc:
+        soft: 4096
+        hard: 8192
+    logging: *default-logging
 
   php-fpm:
     build:
@@ -31,13 +44,22 @@ services:
       - ./docker/php/php-prod.ini:/usr/local/etc/php/php.ini
       - php-logs:/var/log/php
     depends_on:
-      - mysql
-      - redis
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - card-auth-network
     restart: always
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "php-fpm -t 2>/dev/null && php -r 'exit(extension_loaded(\"pdo_mysql\") ? 0 : 1);'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *default-logging
 
   scheduler:
     build:
@@ -49,12 +71,15 @@ services:
       - ./docker/php/php-prod.ini:/usr/local/etc/php/php.ini
       - php-logs:/var/log/php
     depends_on:
-      - mysql
-      - redis
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - card-auth-network
     restart: always
     command: sh -c "mkdir -p /var/log/php && while true; do php think schedule:run >> /var/log/php/scheduler.log 2>&1; sleep 60; done"
+    logging: *default-logging
 
   mysql:
     image: mysql:8.0
@@ -79,6 +104,13 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging: *default-logging
 
   redis:
     image: redis:7-alpine
@@ -91,7 +123,18 @@ services:
     networks:
       - card-auth-network
     restart: always
-    command: redis-server /usr/local/etc/redis/redis.conf
+    # C3: 强制密码
+    command: >
+      sh -c "redis-server /usr/local/etc/redis/redis.conf --requirepass \"$$REDIS_PASSWORD\""
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging: *default-logging
 
   minio:
     image: minio/minio:latest
@@ -100,33 +143,40 @@ services:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:9001:9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      # C2: 强制凭据
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
     volumes:
       - minio-data:/data
     command: server /data --console-address ":9001"
     networks:
       - card-auth-network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *default-logging
 
   # MinIO 初始化（一次性运行）
   minio-init:
     image: minio/mc:latest
     container_name: card-auth-minio-init
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
     environment:
       MINIO_HOST: http://minio:9000
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
       MINIO_BUCKET: ${MINIO_BUCKET:-card-auth}
     entrypoint: >
       /bin/sh -c "
-      sleep 5;
-      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin123};
+      sleep 3;
+      mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD;
       mc mb local/card-auth --ignore-existing;
-      # lifecycle 规则按前缀配置到 card-auth bucket（实际写入路径）
-      # apk-source/ 和 apk-output/ 7 天过期，apk-temp/ 1 小时过期
       mc ilm rule add local/card-auth --prefix 'apk-source/' --expire-days 7 2>/dev/null || true;
       mc ilm rule add local/card-auth --prefix 'apk-output/' --expire-days 7 2>/dev/null || true;
       mc ilm rule add local/card-auth --prefix 'apk-temp/' --expire-hours 1 2>/dev/null || true;
@@ -137,6 +187,7 @@ services:
     networks:
       - card-auth-network
     restart: "no"
+    logging: *default-logging
 
   # APK注入微服务
   apk-inject-service:
@@ -148,35 +199,44 @@ services:
       - "127.0.0.1:8081:8080"
     environment:
       MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
       MINIO_BUCKET: ${MINIO_BUCKET:-card-auth}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
       # 强制要求环境变量，缺失时容器启动报错（不使用默认密码 changeit）
       APK_KEYSTORE_PASSWORD: ${APK_KEYSTORE_PASSWORD:?APK_KEYSTORE_PASSWORD is required}
       APK_KEYSTORE_ALIAS: ${APK_KEYSTORE_ALIAS:-platform}
     volumes:
-      - apk-tmp:/tmp
-      # keystore 通过只读挂载注入，不入库不进镜像
+      # C6: 移除 apk-tmp:/tmp named volume（与 tmpfs 冲突），仅保留 keystore 只读挂载
       - ./deploy/keystore:/opt/keystore:ro
-    mem_limit: 2g
-    cpus: 2
-    pids_limit: 64
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - card-auth-network
     restart: unless-stopped
+    # I5: compose v2 资源语法
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '2'
+          pids: 64
     read_only: true
     tmpfs:
-      - /tmp:noexec,nosuid,nodev,size=1g
+      # C6: tmpfs size 提到 2g，处理大 APK 解压
+      - /tmp:noexec,nosuid,nodev,size=2g
     security_opt:
       - no-new-privileges:true
       # seccomp profile 作为 gVisor 不可用时的兜底加固
       - seccomp:./deploy/seccomp-apk-inject.json
     cap_drop:
       - ALL
-    # gVisor 沙箱（需要宿主机安装 runsc，见 docs/gvisor-setup.md）
-    runtime: runsc
+    # I3: gVisor 沙箱改为可选（未装时由 deploy.sh 不设置 APK_INJECT_RUNTIME，回退默认 runtime）
+    # 若设置 runtime: ${APK_INJECT_RUNTIME:-default} 在某些 compose 版本不识别，改为 deploy.sh 动态注入
+    logging: *default-logging
 
   # APK注入队列Worker
   apk-queue-worker:
@@ -187,12 +247,20 @@ services:
     volumes:
       - ./server:/var/www/server
     depends_on:
-      - mysql
-      - redis
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     user: www
     networks:
       - card-auth-network
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          pids: 128
+    logging: *default-logging
 
   # APK注入任务回收调度器（Task 4 / C6, C7）
   # 每 5 分钟扫描卡死的 PROCESSING 任务和超时未提交的 PENDING 任务
@@ -206,12 +274,20 @@ services:
       - ./docker/php/php-prod.ini:/usr/local/etc/php/php.ini
       - php-logs:/var/log/php
     depends_on:
-      - mysql
-      - redis
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     user: www
     networks:
       - card-auth-network
     restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          pids: 64
+    logging: *default-logging
 
 volumes:
   mysql-data:
@@ -220,7 +296,6 @@ volumes:
   php-logs:
   mysql-logs:
   minio-data:
-  apk-tmp:
 
 networks:
   card-auth-network:

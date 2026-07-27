@@ -22,7 +22,6 @@ RUN apt-get update \
         ca-certificates \
         unzip \
         zip \
-        bash \
         tini \
     && rm -rf /var/lib/apt/lists/*
 

@@ -97,7 +97,7 @@ public class CardVerifyActivity extends Activity {
         verifyButton.setEnabled(false);
         resultText.setText("验证中...");
 
-        final String fingerprint = Build.FINGERPRINT + "_" + Build.SERIAL;
+        final String fingerprint = kamiApp.getDeviceFingerprint();
         final String deviceName = Build.MODEL;
         final String card = cardNo;
 

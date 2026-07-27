@@ -170,9 +170,27 @@ LUA;
 
     /**
      * 获取下载URL
+     * M8: 商户级限流（10 次/小时），防止刷接口放大 MinIO 负载
      */
     public function getDownloadUrl(int $taskId, int $merchantId): string
     {
+        // M8: 商户级下载限流（10 次/小时）
+        $redis = Cache::store('redis')->handler();
+        $limitKey = 'apk_inject:dl_limit:' . $merchantId;
+        $count = (int) $redis->get($limitKey);
+        if ($count >= 10) {
+            throw new \RuntimeException('下载链接获取过于频繁，请稍后再试');
+        }
+        // 原子 INCR，首次设置 EXPIRE
+        $lua = <<<'LUA'
+local c = redis.call('INCR', KEYS[1])
+if c == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return c
+LUA;
+        $redis->eval($lua, [$limitKey, 3600], 1);
+
         $task = ApkInjectTask::where('id', $taskId)->where('merchant_id', $merchantId)->find();
         if (!$task) {
             throw new \RuntimeException('任务不存在');

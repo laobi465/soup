@@ -137,12 +137,13 @@ port_free() {
 
 # 从 .env 读取指定键的值
 # 返回 0=成功(输出值), 1=失败(文件不存在/键不存在/值为空)
+# M2: 用 awk 精确匹配 key, 避免 regex 元字符误匹配
 env_get() {
     local key="$1"
     local file="${2:-.env}"
     [[ -f "$file" ]] || return 1
     local val
-    val=$(grep -E "^${key}=" "$file" 2>/dev/null | tail -n1 | cut -d'=' -f2- | tr -d '"') || return 1
+    val=$(awk -F= -v k="$key" '$1==k{sub(/^[^=]*=/,"");print}' "$file" 2>/dev/null | tail -n1 | tr -d '"') || return 1
     [[ -n "$val" ]] || return 1
     printf '%s' "$val"
 }
@@ -321,10 +322,12 @@ generate_root_env() {
         return 0
     fi
 
-    local mysql_pwd minio_pwd apk_keystore_pwd
+    local mysql_pwd minio_pwd apk_keystore_pwd redis_pwd
     mysql_pwd=$(random_hex 16)
     minio_pwd=$(random_hex 16)
     apk_keystore_pwd=$(random_hex 16)
+    # C3: Redis 强密码（compose 中 redis --requirepass 强制要求）
+    redis_pwd=$(random_hex 16)
 
     cat > "$env_file" <<EOF
 # 自动生成于 $(date '+%Y-%m-%d %H:%M:%S') by deploy.sh
@@ -337,6 +340,9 @@ MINIO_BUCKET=card-auth
 
 # MySQL (compose 用, server/.env 复用此密码)
 MYSQL_ROOT_PASSWORD=${mysql_pwd}
+
+# Redis (compose 中 redis --requirepass 强制要求, 缺失容器拒绝启动)
+REDIS_PASSWORD=${redis_pwd}
 
 # APK 签名 keystore
 APK_KEYSTORE_PASSWORD=${apk_keystore_pwd}
@@ -356,10 +362,12 @@ generate_server_env() {
     fi
 
     # 从根目录 .env 读取已生成的密钥 (确保跨文件一致)
-    local mysql_pwd minio_pwd apk_keystore_pwd
+    local mysql_pwd minio_pwd apk_keystore_pwd redis_pwd
     mysql_pwd="$(env_get MYSQL_ROOT_PASSWORD .env)" || die "无法读取根目录 .env 的 MYSQL_ROOT_PASSWORD"
     minio_pwd="$(env_get MINIO_ROOT_PASSWORD .env)" || die "无法读取根目录 .env 的 MINIO_ROOT_PASSWORD"
     apk_keystore_pwd="$(env_get APK_KEYSTORE_PASSWORD .env)" || die "无法读取根目录 .env 的 APK_KEYSTORE_PASSWORD"
+    # C3: Redis 密码同步到 server/.env 供 PHP 客户端使用
+    redis_pwd="$(env_get REDIS_PASSWORD .env)" || die "无法读取根目录 .env 的 REDIS_PASSWORD"
 
     local app_secret jwt_secret app_debug
     app_secret=$(random_hex 24)
@@ -392,7 +400,7 @@ PREFIX = ca_
 [REDIS]
 HOST = redis
 PORT = 6379
-PASSWORD =
+PASSWORD = ${redis_pwd}
 SELECT = 0
 
 [CACHE]
@@ -670,10 +678,11 @@ run_seeds() {
     mysql_pwd="$(env_get MYSQL_ROOT_PASSWORD .env)" || die "无法读取 .env 的 MYSQL_ROOT_PASSWORD"
 
     # 辅助函数: 查询表记录数 (失败返回 0, 不中断)
+    # C5: 用 MYSQL_PWD 环境变量传递密码, 避免出现在 ps/proc/cmdline
     _count_rows() {
         local table="$1"
         local count
-        count=$($compose_cmd exec -T mysql mysql -uroot -p"${mysql_pwd}" card_auth \
+        count=$($compose_cmd exec -T -e MYSQL_PWD="${mysql_pwd}" mysql mysql -uroot card_auth \
             -N -B -e "SELECT COUNT(*) FROM ${table}" 2>/dev/null) || { echo "0"; return; }
         echo "${count:-0}"
     }
@@ -906,24 +915,25 @@ health_check() {
         fe_url="http://localhost:8080/"
     fi
 
+    # M4: 不仅检查 HTTP 200, 还校验响应体含正常字段（避免 nginx 错误页也返回 200）
     log_info "检查后端: $be_url"
+    local be_resp
     if $PROD_MODE; then
-        if curl -sfk -o /dev/null "$be_url" 2>/dev/null; then
-            log_info "后端健康检查通过 ✓"
-        else
-            log_warn "后端健康检查失败 (服务可能仍在启动, 稍后重试)"
-        fi
+        be_resp=$(curl -sfk "$be_url" 2>/dev/null || true)
     else
-        if curl -sf -o /dev/null "$be_url" 2>/dev/null; then
-            log_info "后端健康检查通过 ✓"
-        else
-            log_warn "后端健康检查失败 (服务可能仍在启动, 稍后重试)"
-        fi
+        be_resp=$(curl -sf "$be_url" 2>/dev/null || true)
+    fi
+    if [[ -n "$be_resp" ]] && echo "$be_resp" | grep -qE '"code"[[:space:]]*:[[:space:]]*0|<!DOCTYPE|<html|ok|success'; then
+        log_info "后端健康检查通过 ✓"
+    else
+        log_warn "后端健康检查失败 (服务可能仍在启动, 稍后重试)"
     fi
 
     if ! $PROD_MODE; then
         log_info "检查前端: $fe_url"
-        if curl -sf -o /dev/null "$fe_url" 2>/dev/null; then
+        local fe_resp
+        fe_resp=$(curl -sf "$fe_url" 2>/dev/null || true)
+        if [[ -n "$fe_resp" ]] && echo "$fe_resp" | grep -qE '<!DOCTYPE|<html|<div|<script'; then
             log_info "前端健康检查通过 ✓"
         else
             log_warn "前端健康检查失败 (服务可能仍在启动)"
@@ -958,9 +968,10 @@ print_access_info() {
     fi
     echo "  MinIO 控制台: http://${host}:9001/"
     echo ""
-    echo "  默认账号: admin / admin123456"
+    # M1: 不在终端回显明文密码（避免 SSH 会话日志/录屏泄露）
+    echo "  默认账号: admin / (初始密码见 server/database/seeds/UserSeeder.php)"
     echo "========================================"
-    log_warn "安全提示: 请立即修改默认密码 (登录后 → 个人中心)"
+    log_warn "安全提示: 请立即登录并修改默认密码 (个人中心 → 修改密码)"
     log_info "其他命令:"
     log_info "  查看状态:   ./deploy.sh status"
     log_info "  查看日志:   ./deploy.sh logs"
@@ -1050,19 +1061,66 @@ cmd_status() {
 cmd_logs() {
     local compose_cmd
     compose_cmd="$(get_compose_cmd)"
-    local service="${EXTRA_ARGS[0]:-}"
+
+    # I9: 支持 --tail N / --since TIME / --no-follow (或 -n)
+    local tail_lines="100"
+    local since_time=""
+    local follow="-f"
+    local service=""
+    local args=("${EXTRA_ARGS[@]:-}")
+
+    local i=0
+    while [[ $i -lt ${#args[@]} ]]; do
+        case "${args[$i]}" in
+            --tail)
+                tail_lines="${args[$((i+1))]:-100}"
+                i=$((i + 2))
+                ;;
+            --tail=*)
+                tail_lines="${args[$i]#*=}"
+                i=$((i + 1))
+                ;;
+            --since)
+                since_time="${args[$((i+1))]:-}"
+                i=$((i + 2))
+                ;;
+            --since=*)
+                since_time="${args[$i]#*=}"
+                i=$((i + 1))
+                ;;
+            --no-follow|-n)
+                follow=""
+                i=$((i + 1))
+                ;;
+            --*)
+                log_warn "未知 logs 参数: ${args[$i]}"
+                i=$((i + 1))
+                ;;
+            *)
+                service="${args[$i]}"
+                i=$((i + 1))
+                ;;
+        esac
+    done
+
+    local opts=()
+    opts+=(--tail "$tail_lines")
+    [[ -n "$since_time" ]] && opts+=(--since "$since_time")
+    [[ -n "$follow" ]] && opts+=("$follow")
+
     if [[ -n "$service" ]]; then
-        log_info "查看 $service 日志 (Ctrl+C 退出)"
-        $compose_cmd logs --tail=100 -f "$service"
+        log_info "查看 $service 日志 (tail=$tail_lines since=${since_time:-无} follow=${follow:-no})"
+        $compose_cmd logs "${opts[@]}" "$service"
     else
-        log_info "查看所有服务日志 (Ctrl+C 退出)"
-        $compose_cmd logs --tail=100 -f
+        log_info "查看所有服务日志 (tail=$tail_lines since=${since_time:-无} follow=${follow:-no})"
+        $compose_cmd logs "${opts[@]}"
     fi
 }
 
 cmd_backup() {
     log_step "数据库备份"
-    local backup_dir="${BACKUP_DIR:-/data/backups/mysql}"
+    # I8: 默认输出到项目目录, 避免非 root 用户无法写 /data
+    local backup_dir="${BACKUP_DIR:-${SCRIPT_DIR}/backups/mysql}"
     local compose_cmd
     compose_cmd="$(get_compose_cmd)"
 
@@ -1074,9 +1132,10 @@ cmd_backup() {
     date_str=$(date +%Y%m%d_%H%M%S)
     db_file="${backup_dir}/card_auth_${date_str}.sql"
 
+    # C5: 用 MYSQL_PWD 环境变量传递密码, 避免出现在 ps/proc/cmdline
     log_info "备份到: $db_file"
-    $compose_cmd exec -T mysql mysqldump \
-        -uroot -p"${mysql_pwd}" \
+    $compose_cmd exec -T -e MYSQL_PWD="${mysql_pwd}" mysql mysqldump \
+        -uroot \
         --single-transaction \
         --routines \
         --triggers \
@@ -1110,7 +1169,8 @@ cmd_reset() {
     compose_cmd="$(get_compose_cmd)"
     log_warn "正在删除所有数据卷..."
     $compose_cmd down -v
-    rm -rf server/runtime/
+    # M8: 同步清理 uploads（reset 后旧文件可能与新数据冲突）
+    rm -rf server/runtime/ server/public/uploads/
     log_info "重置完成, 请重新初始化: ./deploy.sh init && ./deploy.sh up"
 }
 
@@ -1184,10 +1244,12 @@ cmd_enable_apk_inject() {
     $compose_cmd up -d apk-inject-service apk-queue-worker apk-scheduler
 
     # 健康检查
-    log_step "等待 APK 注入服务就绪"
+    # M11: 端口不硬编码, 从环境变量读取（与 compose 中 127.0.0.1:8081:8080 一致）
+    local apk_port="${APK_INJECT_HOST_PORT:-8081}"
+    log_step "等待 APK 注入服务就绪 (port=$apk_port)"
     local max_wait=60
     local waited=0
-    while ! curl -sf http://localhost:8081/api/v1/health 2>/dev/null; do
+    while ! curl -sf "http://localhost:${apk_port}/api/v1/health" 2>/dev/null; do
         if [[ $waited -ge $max_wait ]]; then
             log_warn "APK 注入服务健康检查超时 (${max_wait}s), 请查看日志: ./deploy.sh logs apk-inject-service"
             return 1
@@ -1223,8 +1285,9 @@ cmd_install_gvisor() {
         return 0
     fi
 
-    # 警告: 安装会重启 Docker daemon, 中断所有运行中容器
-    log_warn "安装将重启 Docker daemon, 所有运行中容器会被中断"
+    # 警告: 安装会重启 Docker daemon
+    # M3: 提示影响范围是宿主机所有容器（不仅本平台）
+    log_warn "安装将重启 Docker daemon, 影响宿主机上所有容器（不仅本平台）"
     if ! $ASSUME_YES; then
         if [[ $EUID -ne 0 ]]; then
             log_warn "安装 gVisor 需要 root 权限, 将使用 sudo"

@@ -1,6 +1,10 @@
 FROM php:8.2-fpm-alpine
 
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+# I6: Alpine mirror 可配（默认官方源，国内构建用 --build-arg ALPINE_MIRROR=mirrors.aliyun.com）
+ARG ALPINE_MIRROR=dl-cdn.alpinelinux.org
+RUN if [ "$ALPINE_MIRROR" != "dl-cdn.alpinelinux.org" ]; then \
+        sed -i "s|dl-cdn.alpinelinux.org|${ALPINE_MIRROR}|g" /etc/apk/repositories; \
+    fi
 
 RUN apk add --no-cache \
     freetype \
@@ -27,7 +31,6 @@ RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j$(nproc) \
     gd \
     pdo_mysql \
-    mysqli \
     zip \
     mbstring \
     intl \

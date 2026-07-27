@@ -29,6 +29,24 @@ class ApkInjectController extends BaseController
             return error('参数不完整', 400);
         }
 
+        // M6: sha256 必须为 64 字符 hex
+        if (!preg_match('/^[a-f0-9]{64}$/i', $sha256)) {
+            return error('sha256 格式无效（需 64 位十六进制）', 400);
+        }
+
+        // M6: filename 长度 1-255，仅允许安全字符（字母/数字/中文/.-_() 空格）
+        $filenameLen = mb_strlen($filename);
+        if ($filenameLen < 1 || $filenameLen > 255) {
+            return error('文件名长度需在 1-255 字符之间', 400);
+        }
+        if (!preg_match('/^[\p{L}\p{N}\.\-_() ]+$/u', $filename)) {
+            return error('文件名包含非法字符', 400);
+        }
+
+        // M6: file_size 下限 1KB（拒绝空文件），上限 100MB
+        if ($fileSize < 1024) {
+            return error('文件大小过小（需大于 1KB）', 400);
+        }
         if ($fileSize > 104857600) { // 100MB
             return error('文件大小超过限制（100MB）', 400);
         }

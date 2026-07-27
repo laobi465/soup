@@ -256,8 +256,36 @@ public class KamiProxyApplication extends Application {
         return cardVerified;
     }
 
-    private String getDeviceFingerprint() {
-        return android.os.Build.FINGERPRINT + "_" + android.os.Build.SERIAL;
+    /**
+     * 设备指纹（M2 修复：不再使用废弃的 Build.SERIAL）。
+     *
+     * <p>{@code Build.SERIAL} 自 API 26 起废弃，返回 "unknown"，导致跨设备指纹重复。
+     * 改用 ANDROID_ID（应用签名级稳定）+ Build 多维特征拼接后 SHA-256 哈希，
+     * 输出固定 64 字符 hex。
+     */
+    public String getDeviceFingerprint() {
+        try {
+            String androidId = android.provider.Settings.Secure.getString(
+                    getContentResolver(),
+                    android.provider.Settings.Secure.ANDROID_ID);
+            if (androidId == null) {
+                androidId = "";
+            }
+            String raw = androidId
+                    + "|" + android.os.Build.FINGERPRINT
+                    + "|" + android.os.Build.MODEL
+                    + "|" + android.os.Build.MANUFACTURER;
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : hash) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            Log.e(TAG, "getDeviceFingerprint failed", e);
+            return android.os.Build.FINGERPRINT;
+        }
     }
 
     /**

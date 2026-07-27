@@ -150,7 +150,7 @@ public class ApkInjectService {
         } catch (Exception e) {
             log.error("inject failed, taskId={}", request.getTaskId(), e);
             response.setSuccess(false);
-            response.setError(e.getMessage());
+            response.setError(sanitizeError(e));
             response.setSteps(steps);
         } finally {
             if (tempDir != null) {
@@ -194,6 +194,32 @@ public class ApkInjectService {
         if (code != 0) {
             throw new RuntimeException("zipalign失败(code=" + code + "): " + out);
         }
+    }
+
+    /**
+     * 错误信息脱敏（M5 修复）：按异常类型/消息特征映射到白名单分类，
+     * 不向商户泄露 tempDir 路径、aapt2/apksigner 原始输出、堆栈等内部信息。
+     * 原始异常已由 {@code log.error(..., e)} 完整记录到服务端日志。
+     */
+    private String sanitizeError(Throwable e) {
+        String msg = e.getMessage() != null ? e.getMessage() : "";
+        String cls = e.getClass().getSimpleName();
+
+        if (msg.contains("ZIP 炸弹") || msg.contains("魔数") || msg.contains("ZIP炸弹")) {
+            return "APK 文件校验失败";
+        }
+        if (msg.contains("加固") || msg.contains("shell")) {
+            return "检测到加固，暂不支持";
+        }
+        if (msg.contains("minSdk") || msg.contains("minSdkVersion")) {
+            return "APK 最低 SDK 版本不满足要求（需 API 21+）";
+        }
+        if (cls.contains("RuntimeException") && (msg.contains("aapt2")
+                || msg.contains("apksigner") || msg.contains("zipalign")
+                || msg.contains("APKEditor"))) {
+            return "APK 解析或签名失败";
+        }
+        return "注入处理失败，请重试或联系客服";
     }
 
     private void cleanupTempDir(Path dir) {
