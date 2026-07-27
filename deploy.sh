@@ -748,8 +748,53 @@ start_services() {
         recreate_flag="--force-recreate"
         log_info "检测到端口映射变化, 强制重建容器"
     fi
-    $compose_cmd up -d $recreate_flag $services
-    log_info "核心服务已启动 ✓"
+
+    # 第一次尝试启动
+    local output
+    if output=$($compose_cmd up -d $recreate_flag $services 2>&1); then
+        log_info "核心服务已启动 ✓"
+        return 0
+    fi
+
+    # 失败: 检测是否为端口冲突 (address already in use / bind host port)
+    if ! echo "$output" | grep -qE "address already in use|bind host port|failed to bind"; then
+        # 非端口冲突错误, 直接输出并失败
+        echo "$output" >&2
+        die "启动服务失败 (非端口冲突, 见上方错误)"
+    fi
+
+    # 端口冲突: 从错误信息解析冲突端口 → 对应服务
+    log_warn "检测到端口冲突, 自动生成 override 重试"
+    local conflict_services=()
+    if echo "$output" | grep -qE ":3306/"; then conflict_services+=("mysql"); fi
+    if echo "$output" | grep -qE ":6379/"; then conflict_services+=("redis"); fi
+
+    if [[ ${#conflict_services[@]} -eq 0 ]]; then
+        echo "$output" >&2
+        die "无法识别冲突端口 (仅自动处理 3306/6379, 其他端口请手动释放)"
+    fi
+
+    # 生成/更新 override 移除冲突服务的宿主机端口映射
+    local override_file="docker-compose.override.yml"
+    log_warn "将为以下服务移除宿主机端口映射: ${conflict_services[*]}"
+    {
+        echo "# 自动生成于 $(date '+%Y-%m-%d %H:%M:%S') by deploy.sh (start_services fallback)"
+        echo "# 移除被外部占用的宿主机端口映射, 容器间通过 docker 网络通信不受影响"
+        echo "services:"
+        for svc in "${conflict_services[@]}"; do
+            echo "  ${svc}:"
+            echo "    ports: []"
+        done
+    } > "$override_file"
+    log_info "已生成/更新 $override_file"
+
+    # 重新获取 compose_cmd (会自动加载新 override) 并强制重建重试
+    compose_cmd="$(get_compose_cmd)"
+    if ! $compose_cmd up -d --force-recreate $services 2>&1; then
+        echo "$output" >&2
+        die "重试启动仍失败, 请手动检查端口占用: ss -tlnp | grep -E ':(3306|6379)'"
+    fi
+    log_info "核心服务已启动 ✓ (端口冲突已自动处理)"
 }
 
 # 检测端口冲突: 若宿主机 3306/6379 被非本平台容器占用, 自动生成
