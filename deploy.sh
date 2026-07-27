@@ -605,12 +605,15 @@ start_services() {
     local compose_cmd
     compose_cmd="$(get_compose_cmd)"
 
-    # 通过 --scale 0 排除 APK 注入相关服务 (默认不启动)
-    $compose_cmd up -d \
-        --scale apk-inject-service=0 \
-        --scale apk-queue-worker=0 \
-        --scale apk-scheduler=0 \
-        nginx php-fpm mysql redis minio minio-init
+    # 通过显式指定服务列表排除 APK 注入相关服务 (默认不启动)
+    # docker compose up [SERVICE...] 仅启动指定服务及其依赖, 无需 --scale 0
+    # (新版 compose v2 中 --scale service=0 会将服务标记为 disabled 并报错)
+    local services="nginx php-fpm mysql redis minio minio-init"
+    if $PROD_MODE; then
+        # 生产环境额外启动通用定时任务调度器 (非 APK 专用)
+        services="$services scheduler"
+    fi
+    $compose_cmd up -d $services
     log_info "核心服务已启动 ✓"
 }
 
